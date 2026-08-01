@@ -1118,6 +1118,27 @@ static void CG_VRAnchorOnTag(refEntity_t *model, int tagNum)
 
 /*
 ===============
+CG_VRHandsTracked
+
+Whether there is a headset with a tracked weapon hand, asked before deciding
+what the first person model is for.
+
+The surface selection happens well before CG_VRPlaceViewModel is reached, and
+it has to know then whether these are a pair of tracked hands or a flat view
+model - the flat game hides the arms when the player has no weapon, and in VR
+that is the one case where they should stay.
+===============
+*/
+static qboolean CG_VRHandsTracked(void)
+{
+    vec3_t trackingOffset, angles;
+    float  baseYaw = 0.0f;
+
+    return (cgi.VR_GetWeaponPose && cgi.VR_GetWeaponPose(trackingOffset, angles, &baseYaw)) ? qtrue : qfalse;
+}
+
+/*
+===============
 CG_VRPlaceViewModel
 
 Puts the first person model where the player's hand is.
@@ -1910,9 +1931,43 @@ void CG_ModelAnim(centity_t *cent, qboolean bDoShaderTime)
 
             if ((cent->currentState.eFlags & EF_UNARMED) || cg_drawviewmodel->integer <= 1
                 || cg.snap->ps.stats[STAT_INZOOM] || cg.snap->ps.stats[STAT_HEALTH] <= 0) {
-                // unarmed or zooming, hide the arms
-                for (i = 0; i < MAX_MODEL_SURFACES; i++) {
-                    model.surfaces[i] |= MDL_SURFACE_NODRAW;
+                //
+                //  Added in OPM
+                //
+                //  Being unarmed is not a reason to have no hands in VR. Flat,
+                //  this model exists only to hold a weapon, so putting the gun
+                //  away hides the arms with it and nobody notices. In a headset
+                //  the player is holding two controllers whether or not there
+                //  is anything in them, and hands that vanish when the weapon
+                //  does read as the tracking having dropped out.
+                //
+                //  No mesh work is needed for this: the bare hands are already
+                //  separate surfaces - triggerhand is the right, lefthand the
+                //  left. Only garandhand goes, being a left hand posed around a
+                //  rifle that is not there.
+                //
+                //  The other three reasons to hide still hide. Zoom and death
+                //  are not about whether a weapon is held, and
+                //  cg_drawviewmodel is the player asking for no view model at
+                //  all - none of those should be overridden here.
+                //
+                if ((cent->currentState.eFlags & EF_UNARMED) && cg_drawviewmodel->integer > 1
+                    && !cg.snap->ps.stats[STAT_INZOOM] && cg.snap->ps.stats[STAT_HEALTH] > 0
+                    && CG_VRHandsTracked()) {
+                    const int iGarandHand = cgi.Surface_NameToNum(model.tiki, "garandhand");
+
+                    if (iGarandHand >= 0) {
+                        model.surfaces[iGarandHand] |= MDL_SURFACE_NODRAW;
+                    }
+
+                    //  Which sends the left hand to its own controller below,
+                    //  exactly as it does when a weapon is held.
+                    pszVROffHandSurf = "lefthand";
+                } else {
+                    // unarmed or zooming, hide the arms
+                    for (i = 0; i < MAX_MODEL_SURFACES; i++) {
+                        model.surfaces[i] |= MDL_SURFACE_NODRAW;
+                    }
                 }
             } else {
                 // show/hide the garand hand depending if it's a rifle or not
@@ -1982,21 +2037,27 @@ void CG_ModelAnim(centity_t *cent, qboolean bDoShaderTime)
                 //
                 if (CG_VRPlaceViewModel(&model)) {
                     //
-                    //  The hand that is not holding the weapon belongs on its
-                    //  own controller, so it comes off this copy and is drawn
-                    //  again below at the other hand. The sleeves stay here:
-                    //  they are one mesh across both forearms and cannot be
-                    //  told apart without re-authoring the model.
+                    //  This copy is the weapon hand and nothing else.
+                    //
+                    //  The other hand comes off it and is drawn again below on
+                    //  its own controller. The sleeves come off too, which is
+                    //  the part that is not obvious: viewsleeves is a single
+                    //  mesh carrying *both* forearms - weighted 27% to
+                    //  Bip01 R Forearm and 27% to Bip01 L Forearm, with both
+                    //  elbows, shoulders and clavicles - so drawing it on the
+                    //  hand that is anchored to the right controller hangs a
+                    //  disembodied left sleeve in the air beside it.
+                    //
+                    //  What is left is triggerhand, which is a whole hand and
+                    //  not a stump: it is weighted to Bip01 R Hand, every R
+                    //  finger bone, and helper Rwrist. The wrist is included,
+                    //  the forearm is not, and there is no way to get part of
+                    //  one without re-authoring the mesh - the forearm exists
+                    //  only inside the two-armed sleeve.
                     //
                     bVRHandTracked = qtrue;
 
-                    if (pszVROffHandSurf) {
-                        const int iOffHandSurf = cgi.Surface_NameToNum(model.tiki, pszVROffHandSurf);
-
-                        if (iOffHandSurf >= 0) {
-                            model.surfaces[iOffHandSurf] |= MDL_SURFACE_NODRAW;
-                        }
-                    }
+                    CG_VRShowOnlySurface(&model, "triggerhand");
                 } else {
                     if (cg.snap->ps.stats[STAT_HEALTH] > 0 && !cg_animationviewmodel->integer) {
                         CG_OffsetFirstPersonView(&model, qfalse);
