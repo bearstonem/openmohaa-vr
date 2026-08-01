@@ -1524,6 +1524,68 @@ void CG_DrawVote()
 CG_Draw2D
 ==============
 */
+/*
+=================
+CG_DrawVRWheel
+
+The weapon wheel, while the player is holding it open.
+
+Deliberately plain: names in a ring with the one under the controller lit up.
+A wheel is only worth having if it can be read at a glance while something is
+shooting at you, and the thing that makes it readable is the highlight moving
+the moment the wrist does - not what the segments are made of.
+
+Drawn with the world rather than on the wrist panel, because the hand aiming it
+is out in front of the player and a menu that lives somewhere else would have
+them looking in two places at once.
+=================
+*/
+static void CG_DrawVRWheel(void)
+{
+    const char *names[8];
+    int         selection = -1;
+    int         count = 0;
+    int         i;
+    float       cx, cy, radius;
+
+    if (!cgi.VR_GetWheel || !cgi.VR_GetWheel(&selection, names, (int)ARRAY_LEN(names), &count)) {
+        return;
+    }
+
+    if (count <= 0) {
+        return;
+    }
+
+    //  The same virtual screen the objectives text uses. Computing a scale
+    //  from vidWidth/640 instead is not the same thing on this device - the
+    //  eye buffer is 1680x1760, nothing like 4:3 - and it put the ring off
+    //  the edge of the picture.
+    cx = 320.0f;
+    cy = 240.0f;
+    radius = 90.0f;
+
+    for (i = 0; i < count; i++) {
+        //  Clockwise from straight up, matching the order the VR layer numbers
+        //  the segments in - the two have to agree or the highlight lands on
+        //  the wrong word.
+        const float angle = (float)i * (2.0f * M_PI / (float)count);
+        const float x = cx + sinf(angle) * radius;
+        const float y = cy - cosf(angle) * radius;
+        vec4_t      colour;
+
+        if (i == selection) {
+            colour[0] = 1.0f; colour[1] = 0.85f; colour[2] = 0.4f; colour[3] = 1.0f;
+        } else {
+            colour[0] = 0.75f; colour[1] = 0.75f; colour[2] = 0.75f; colour[3] = 0.6f;
+        }
+
+        cgi.R_SetColor(colour);
+        cgi.R_DrawString(cgs.media.objectiveFont, names[i], x, y / cgs.uiHiResScale[1], -1, cgs.uiHiResScale);
+    }
+
+    cgi.R_SetColor(NULL);
+}
+
 void CG_Draw2D(void)
 {
     //
@@ -1551,6 +1613,8 @@ void CG_Draw2D(void)
     }
 
     if (pass != 1) {
+        CG_DrawVRWheel();
+
         // The reticle is aimed at things out in the world and the scope
         // surround has to sit around the magnified view, so both stay with the
         // world rather than travelling to the wrist.

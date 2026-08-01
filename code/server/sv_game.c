@@ -1758,6 +1758,62 @@ static qboolean SV_VR_GetWeaponAim( vec3_t out ) {
 }
 
 /*
+==================
+SV_VR_GetHeadOffset
+
+Hands the head's offset within the play space to the game, so that a trace from
+the player's eye starts where the player is actually looking from.
+
+Single player only, for the same reason as the aim above: a dedicated server has
+no headset, answers false, and the game keeps the body's eye position.
+==================
+*/
+static qboolean SV_VR_GetHeadOffset( vec3_t out, float *baseYaw ) {
+#if defined(USE_OPENXR) && !defined(DEDICATED)
+	return VR_GetHeadOffset( out, baseYaw );
+#else
+	return qfalse;
+#endif
+}
+
+/*
+==================
+SV_VR_GetClimbPull
+
+Hands the ladder drag to the game, which is the only place that can act on it:
+the climb moves the player's origin, and where the player may be moved to is a
+question about the world.
+
+Single player only, as above.
+==================
+*/
+static qboolean SV_VR_GetClimbPull( vec3_t out ) {
+#if defined(USE_OPENXR) && !defined(DEDICATED)
+	return VR_GetClimbPull( out );
+#else
+	return qfalse;
+#endif
+}
+
+/*
+==================
+SV_VR_GetThrow
+
+Hands the weapon hand's velocity to the game, so a thrown grenade leaves along
+the arm's own swing.
+
+Single player only, as with the rest of these.
+==================
+*/
+static qboolean SV_VR_GetThrow( vec3_t velocity, float *baseYaw ) {
+#if defined(USE_OPENXR) && !defined(DEDICATED)
+	return VR_GetThrow( velocity, baseYaw );
+#else
+	return qfalse;
+#endif
+}
+
+/*
 ===============
 SV_InitGameProgs
 
@@ -1974,6 +2030,9 @@ void SV_InitGameProgs( void ) {
     import.Cvar_Find                    = Cvar_FindVar;
     
     import.VR_GetWeaponAim              = SV_VR_GetWeaponAim;
+    import.VR_GetHeadOffset             = SV_VR_GetHeadOffset;
+    import.VR_GetClimbPull              = SV_VR_GetClimbPull;
+    import.VR_GetThrow                  = SV_VR_GetThrow;
 
     import.Client_NumPendingCommands	= PF_SV_Client_NumPendingCommands;
     import.Client_MaxPendingCommands	= PF_SV_Client_MaxPendingCommands;

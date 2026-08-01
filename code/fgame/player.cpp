@@ -4179,6 +4179,53 @@ void Player::ClientMove(usercmd_t *ucmd)
                 setOrigin(origin);
                 CheckGround();
             }
+
+            //
+            // Added in OPM
+            //
+            //  Climbing a ladder by hand in VR.
+            //
+            //  A ladder here is not moved along by velocity - the pmove is
+            //  skipped entirely on a wall, and the player is carried by the
+            //  root motion of the climb animation above. That is the right
+            //  behaviour for a stick, and it is the wrong one for a pair of
+            //  hands: the animation decides how fast the player goes, and a
+            //  drag has to be the player deciding.
+            //
+            //  So this runs after the animation, not instead of it. The climb
+            //  animation still plays, so the arms on the ladder still look
+            //  like arms on a ladder, and the distance actually travelled is
+            //  the distance the hand pulled.
+            //
+            //  The hand that has hold of a rung is not moving through the
+            //  world; the world is moving past it. Hence the negation - the
+            //  hand goes down and the player goes up.
+            //
+            //  It goes through AnimMove for the same reason the animation does:
+            //  the ladder has a top and a wall behind it, and a drag that
+            //  ignored them would pull the player through both.
+            //
+            if (movecontrol == MOVECONTROL_CLIMBWALL && gi.VR_GetClimbPull) {
+                vec3_t vPull;
+
+                if (gi.VR_GetClimbPull(vPull)) {
+                    Vector vMove;
+
+                    //  The play space offset is already in the engine's frame
+                    //  and its units, and a ladder is climbed vertically. Only
+                    //  the height is taken: the horizontal components of a pull
+                    //  are the player's arm swinging around the rung rather
+                    //  than any intent to travel, and acting on them would peel
+                    //  them off the ladder sideways.
+                    vMove = Vector(0.0f, 0.0f, -vPull[2]);
+
+                    if (vMove != vec_zero) {
+                        AnimMove(vMove, &origin);
+                        setOrigin(origin);
+                        CheckGround();
+                    }
+                }
+            }
         }
     }
 
@@ -12409,6 +12456,13 @@ int Player::getUseableEntities(int *touch, int maxcount, bool requiresLookAt)
     Vector  offset;
     Vector  max;
     Vector  min;
+    vec3_t  vBodyEye;
+
+    static cvar_t *g_vrTraceUse = NULL;
+
+    if (!g_vrTraceUse) {
+        g_vrTraceUse = gi.Cvar_Get("vr_traceUse", "0", 0);
+    }
 
     if ((g_gametype->integer != GT_SINGLE_PLAYER && IsSpectator()) || IsDead()) {
         return 0;
@@ -12426,6 +12480,52 @@ int Player::getUseableEntities(int *touch, int maxcount, bool requiresLookAt)
     AngleVectors(m_vViewAng, offset, NULL, NULL);
 
     start = m_vViewPos;
+
+    //
+    // Added in OPM
+    //
+    //  In VR, start the look-at trace from where the player is actually
+    //  looking from.
+    //
+    //  m_vViewPos is the body's eye - the entity origin plus a fixed view
+    //  height - and the camera is not there. R_VRComposeView adds the head's
+    //  offset within the play space on top of it, so the two agree only while
+    //  the body is keeping up with the head. They come apart in exactly the
+    //  case this function exists to serve: leaning through a doorway or over a
+    //  crate to reach the thing on the other side, where the body is stopped
+    //  by the geometry and the head is not.
+    //
+    //  The direction needs no such correction. m_vViewAng is already the
+    //  headset's - the client writes the head's yaw and pitch straight into
+    //  the view angles - so this trace has always pointed where the player is
+    //  looking, and only ever started from the wrong place.
+    //
+    VectorCopy(start, vBodyEye);
+
+    {
+        vec3_t vHeadOffset;
+        float  fBaseYaw = 0.0f;
+
+        if (gi.VR_GetHeadOffset && gi.VR_GetHeadOffset(vHeadOffset, &fBaseYaw)) {
+            vec3_t vEye, vBodyAngles, vBodyAxis[3];
+            int    i;
+
+            VectorCopy(start, vEye);
+
+            //  The same composition the renderer uses for the camera. The
+            //  offset is in the play space, so it turns with the body's
+            //  heading - which is the view yaw less however much of it came
+            //  from the head, or a snap turn would leave it behind.
+            VectorSet(vBodyAngles, 0.0f, m_vViewAng[YAW] - fBaseYaw, 0.0f);
+            AnglesToAxis(vBodyAngles, vBodyAxis);
+
+            for (i = 0; i < 3; i++) {
+                VectorMA(vEye, vHeadOffset[i], vBodyAxis[i], vEye);
+            }
+
+            start = Vector(vEye);
+        }
+    }
 
     if (requiresLookAt) {
         min = Vector(-4.f, -4.f, -4.f);
@@ -12451,7 +12551,48 @@ int Player::getUseableEntities(int *touch, int maxcount, bool requiresLookAt)
         max = start + Vector(31.f, 31.f, 31.f);
     }
 
-    return gi.AreaEntities(min, max, touch, maxcount);
+    {
+        const int num = gi.AreaEntities(min, max, touch, maxcount);
+
+        //
+        // Added in OPM
+        //
+        //  "Use works about half the time" is not something that can be
+        //  reasoned to an answer - the button, the trace and the box each have
+        //  a way of coming up empty, and they all look the same from inside a
+        //  headset. So this says which one it was.
+        //
+        //  Everything needed to tell them apart is here: the body's eye, the
+        //  eye actually used after the play space offset, how far the trace
+        //  got, and what the box caught. A press that prints nothing at all
+        //  did not reach the game and the fault is in the binding.
+        //
+        if (g_vrTraceUse && g_vrTraceUse->integer) {
+            int i;
+
+            gi.Printf(
+                "VR use: body eye %.0f %.0f %.0f -> traced from %.0f %.0f %.0f | ang %.0f %.0f | "
+                "frac %.2f end %.0f %.0f %.0f | %d in box\n",
+                vBodyEye[0], vBodyEye[1], vBodyEye[2],
+                start[0], start[1], start[2],
+                m_vViewAng[0], m_vViewAng[1],
+                requiresLookAt ? trace.fraction : 1.0f,
+                offset[0], offset[1], offset[2],
+                num
+            );
+
+            for (i = 0; i < num && i < 8; i++) {
+                gentity_t *hit = &g_entities[touch[i]];
+
+                gi.Printf("VR use:   [%d] %s%s\n",
+                    touch[i],
+                    (hit->entity && hit->entity->getClassname()) ? hit->entity->getClassname() : "?",
+                    hit->inuse ? "" : " (not in use)");
+            }
+        }
+
+        return num;
+    }
 }
 
 bool Player::IsPrimaryWeaponValid() const

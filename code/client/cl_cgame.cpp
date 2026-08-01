@@ -560,6 +560,22 @@ static qboolean CL_VR_GetHandPose( int hand, vec3_t trackingOffset, vec3_t angle
 
 /*
 ====================
+CL_VR_GetWheel
+
+The weapon wheel's state, so cgame can draw it. Nothing but a pass through -
+the wheel is tracked where the controller is read.
+====================
+*/
+static qboolean CL_VR_GetWheel( int *selection, const char **names, int maxNames, int *count ) {
+#if defined(USE_OPENXR)
+	return VR_GetWheel( selection, names, maxNames, count );
+#else
+	return qfalse;
+#endif
+}
+
+/*
+====================
 CL_GetShaderPointer
 ====================
 */
@@ -870,6 +886,7 @@ void CL_InitCGameDLL( clientGameImport_t *cgi, clientGameExport_t **cge ) {
 	cgi->getConfigStringIdNormalized = CPT_NormalizeConfigstring;
 	cgi->VR_GetWeaponPose            = CL_VR_GetWeaponPose;
 	cgi->VR_GetHandPose              = CL_VR_GetHandPose;
+	cgi->VR_GetWheel                 = CL_VR_GetWheel;
 
 	cgi->fsDebug					= fs_debug;
 	cgi->HudDrawElements			= cls.HudDrawElements;

@@ -797,6 +797,14 @@ static void CL_VRMove( usercmd_t *cmd ) {
 		VR_SetBaseYaw( in.headYaw );
 	}
 
+	// The grips hold rungs on a ladder rather than steadying the weapon and
+	// reloading, and the VR layer cannot see the player state to know that.
+	VR_SetClimbing( ( cl.snap.valid && cl.snap.ps.pm_type == PM_CLIMBWALL ) ? qtrue : qfalse );
+
+	// And whether there is anything in the player's hand, which decides
+	// whether a grip closing on a holster draws from it or puts back into it.
+	VR_SetArmed( ( cl.snap.valid && cl.snap.ps.activeItems[1] >= 0 ) ? qtrue : qfalse );
+
 	// Walking follows the off hand rather than the gaze. Tying travel to where
 	// the player is looking means they cannot glance sideways without veering,
 	// which is what makes room scale movement feel like being dragged around;

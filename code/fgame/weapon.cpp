@@ -1440,7 +1440,279 @@ void Weapon::Shoot(Event *ev)
 
         switch (firetype[mode]) {
         case FT_PROJECTILE:
-            ProjectileAttack(pos, forward, owner, projectileModel[mode], charge_fraction, 0, this);
+            {
+                //
+                // Added in OPM
+                //
+                //  A thrown weapon in VR goes where the arm sent it.
+                //
+                //  The flat game throws along the view at a speed set by how
+                //  long the button was held, because a mouse has no other way
+                //  to say "over there, gently". A hand does: the swing carries
+                //  both the direction and the strength, and using anything
+                //  else means the player winds up, lets go, and watches the
+                //  grenade leave along their nose instead.
+                //
+                //  Only for grenades. Rockets and the like are projectiles
+                //  too, and they are fired rather than thrown - those keep the
+                //  weapon's own aim.
+                //
+                Vector   vThrowDir = forward;
+                float    fThrowFraction = 0.0f;
+                qboolean bThrown = qfalse;
+
+                if ((GetWeaponClass() & WEAPON_CLASS_GRENADE) && gi.VR_GetThrow) {
+                    vec3_t vVel;
+                    float  fBaseYaw = 0.0f;
+
+                    if (gi.VR_GetThrow(vVel, &fBaseYaw)) {
+                        Sentient *pOwner = (Sentient *)(Entity *)owner;
+                        vec3_t    vBodyAngles, vBodyAxis[3], vWorld;
+                        float     fSpeed;
+                        int       i;
+
+                        //  Into the world the same way every other play space
+                        //  vector here is: rotated by the heading the body has
+                        //  that the head did not give it.
+                        VectorSet(vBodyAngles, 0.0f,
+                            (pOwner ? pOwner->GetViewAngles()[YAW] : 0.0f) - fBaseYaw, 0.0f);
+                        AnglesToAxis(vBodyAngles, vBodyAxis);
+
+                        VectorClear(vWorld);
+                        for (i = 0; i < 3; i++) {
+                            VectorMA(vWorld, vVel[i], vBodyAxis[i], vWorld);
+                        }
+
+                        fSpeed = VectorLength(vWorld);
+
+                        if (fSpeed > 1.0f) {
+                            static cvar_t *vr_throwFull = NULL;
+                            float          fReference;
+
+                            VectorScale(vWorld, 1.0f / fSpeed, vWorld);
+
+                            //
+                            //  Both the direction and the strength come from
+                            //  the swing. This is a physical throw: the grenade
+                            //  leaves along the line the hand was travelling,
+                            //  at a speed set by how fast it was going.
+                            //
+                            //  Which instant of the swing to read is the whole
+                            //  problem, and it took three tries to get right.
+                            //  Averaging across the release blends the wind up
+                            //  with the follow through and aims between them.
+                            //  Taking the peak of the whole swing catches the
+                            //  backswing - measured on device, four throws all
+                            //  came out around 0.95 *backwards*. What works is
+                            //  the peak of a short window ending at release,
+                            //  which is what the hand was doing as it let go;
+                            //  the same four throws then measured 0.89 to 0.94
+                            //  straight ahead, and an underhand lob came out
+                            //  genuinely upward at 0.58.
+                            //
+                            //  RTCWQuest does not do this at all - its grenade
+                            //  (VrInputDefault.c, the backpack mode) is only a
+                            //  selection gesture, thrown afterwards by the
+                            //  game's own fire along the controller. Aiming by
+                            //  the controller is steadier and it is not what a
+                            //  throw is. This port does the harder thing on
+                            //  purpose.
+                            //
+
+                            //
+                            //  Strength as a fraction of the game's own throw,
+                            //  not as an absolute speed.
+                            //
+                            //  An absolute number would have to be invented
+                            //  here and would then disagree with whatever the
+                            //  grenade was authored to do - and every thrown
+                            //  weapon has its own. The fraction is the knob the
+                            //  engine already uses for a held throw, so feeding
+                            //  it from the arm keeps all of that tuning and
+                            //  only changes what decides it.
+                            //
+                            //  The reference is the peak speed of a hard throw,
+                            //  measured on device: four throws came in between
+                            //  298 and 338 units a second, so 340 is about what
+                            //  a full effort looks like. Below that the throw
+                            //  scales down; a gentle lob stays a gentle lob.
+                            //
+                            if (!vr_throwFull) {
+                                vr_throwFull = gi.Cvar_Get("vr_throwFull", "340", CVAR_ARCHIVE);
+                            }
+
+                            fReference = (vr_throwFull && vr_throwFull->value > 1.0f)
+                                ? vr_throwFull->value : 340.0f;
+
+//
+                            //  Linear, with a floor.
+                            //
+                            //  A square root curve was tried here and made
+                            //  everything stronger, including the overhand
+                            //  throw that was already right: the same swing
+                            //  that measured 89% linear came out at 94%, and
+                            //  softer ones moved far more - 192 units a second
+                            //  went from 56% to 75%. It read as the throw
+                            //  having become too sharp, because it had.
+                            //
+                            //  The strong end was never the problem. Linear is
+                            //  what the arm expects, and a floor lifts the
+                            //  gentle throws that would otherwise drop at the
+                            //  player's feet without touching anything above
+                            //  it.
+                            //
+                            //
+                            //  Raised to a power, and the power is above one on
+                            //  purpose.
+                            //
+                            //  A lob leaves at around 45 degrees, which is the
+                            //  angle that carries furthest - so a gentle
+                            //  underhand at half strength outruns a hard flat
+                            //  throw, and lobs sailed past where they were
+                            //  aimed. Linear strength is not enough to stop
+                            //  that, because the angle is doing the work.
+                            //
+                            //  An exponent above one bends the gentle end down
+                            //  hard while barely touching the top, which is the
+                            //  reverse of the square root tried earlier - that
+                            //  lifted the bottom and made everything too sharp.
+                            //
+                            {
+                                static cvar_t *vr_throwCurve = NULL;
+                                float          fCurve;
+
+                                if (!vr_throwCurve) {
+                                    vr_throwCurve = gi.Cvar_Get("vr_throwCurve", "1.5", CVAR_ARCHIVE);
+                                }
+
+                                fCurve = (vr_throwCurve && vr_throwCurve->value > 0.1f)
+                                    ? vr_throwCurve->value : 1.5f;
+
+                                fThrowFraction = pow(fSpeed / fReference, fCurve);
+                            }
+
+                            //  A floor rather than zero: the player has decided
+                            //  to throw, and a grenade that drops at their feet
+                            //  because the swing was polite is not a mechanic.
+                            //  Tunable, because where it belongs is a question
+                            //  about how it feels and every guess so far has
+                            //  cost a rebuild.
+                            {
+                                static cvar_t *vr_throwMin = NULL;
+                                float          fMin;
+
+                                if (!vr_throwMin) {
+                                    vr_throwMin = gi.Cvar_Get("vr_throwMin", "0.2", CVAR_ARCHIVE);
+                                }
+
+                                fMin = vr_throwMin ? vr_throwMin->value : 0.2f;
+
+                                if (fThrowFraction < fMin) {
+                                    fThrowFraction = fMin;
+                                }
+                            }
+
+                            if (fThrowFraction > 1.0f) {
+                                fThrowFraction = 1.0f;
+                            }
+
+                            //
+                            //  Damp the sideways component of a gentle throw.
+                            //
+                            //  This is the one place here that deliberately
+                            //  does not report what the arm did. An underhand
+                            //  swing comes across the body, so the hand really
+                            //  is moving sideways as it lets go - measured on
+                            //  device, lobs drifted left by 0.35 and once by
+                            //  0.73, more sideways than forward. That is honest
+                            //  physics and it is not what the player meant.
+                            //
+                            //  Scaled by how gentle the throw is, so a hard
+                            //  overhand keeps its true direction - those were
+                            //  already landing where they were aimed and must
+                            //  not be touched - while a soft lob is pulled back
+                            //  towards where the player is facing.
+                            //
+                            {
+                                static cvar_t *vr_throwDamp = NULL;
+                                float          fDamp, fViewYaw, fRad, fC, fS;
+                                float          fAheadC, fLeftC;
+
+                                if (!vr_throwDamp) {
+                                    vr_throwDamp = gi.Cvar_Get("vr_throwDamp", "0.8", CVAR_ARCHIVE);
+                                }
+
+                                fDamp = (vr_throwDamp ? vr_throwDamp->value : 0.8f)
+                                    * (1.0f - fThrowFraction);
+
+                                if (fDamp < 0.0f) {
+                                    fDamp = 0.0f;
+                                } else if (fDamp > 0.95f) {
+                                    fDamp = 0.95f;
+                                }
+
+                                fViewYaw = pOwner ? pOwner->GetViewAngles()[YAW] : 0.0f;
+                                fRad = -DEG2RAD(fViewYaw);
+                                fC = cos(fRad);
+                                fS = sin(fRad);
+
+                                //  Into the player's frame, damp across, and
+                                //  back out again.
+                                fAheadC = vWorld[0] * fC - vWorld[1] * fS;
+                                fLeftC  = vWorld[0] * fS + vWorld[1] * fC;
+
+                                fLeftC *= (1.0f - fDamp);
+
+                                vWorld[0] = fAheadC * fC + fLeftC * fS;
+                                vWorld[1] = -fAheadC * fS + fLeftC * fC;
+
+                                VectorNormalize(vWorld);
+                            }
+
+                            vThrowDir = Vector(vWorld);
+
+                            {
+                                //  The direction as it reaches the world, which
+                                //  is the only one worth reading. The play
+                                //  space vector logged on the VR side is
+                                //  relative to whichever way the room was
+                                //  facing when tracking started, so forward and
+                                //  backward cannot be told apart in it.
+                                static cvar_t *vr_traceThrow = NULL;
+
+                                if (!vr_traceThrow) {
+                                    vr_traceThrow = gi.Cvar_Get("vr_traceThrow", "0", 0);
+                                }
+
+                                if (vr_traceThrow && vr_traceThrow->integer) {
+                                    //  Relative to where the player is facing,
+                                    //  which is the only frame that answers the
+                                    //  question being asked. World axes belong
+                                    //  to the map and play space axes to the
+                                    //  room; in neither can "straight ahead" be
+                                    //  told from "ninety degrees off". Here
+                                    //  ahead is +1 0 0, the player's left is
+                                    //  0 +1 0, and up is up.
+                                    const float fViewYaw = pOwner ? pOwner->GetViewAngles()[YAW] : 0.0f;
+                                    const float fRad = -DEG2RAD(fViewYaw);
+                                    const float fC = cos(fRad);
+                                    const float fS = sin(fRad);
+                                    const float fAhead = vWorld[0] * fC - vWorld[1] * fS;
+                                    const float fLeft  = vWorld[0] * fS + vWorld[1] * fC;
+
+                                    gi.Printf("VR throw: ahead %.2f left %.2f up %.2f | speed %.0f -> %.0f%% of full\n",
+                                        fAhead, fLeft, vWorld[2], fSpeed, fThrowFraction * 100.0f);
+                                }
+                            }
+
+                            bThrown = qtrue;
+                        }
+                    }
+                }
+
+                ProjectileAttack(pos, vThrowDir, owner, projectileModel[mode],
+                    bThrown ? fThrowFraction : charge_fraction, 0, this);
+            }
             break;
         case FT_LANDMINE:
             PlaceLandmine(pos, owner, projectileModel[mode], this);

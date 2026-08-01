@@ -467,6 +467,13 @@ functions exported to the main executable
          */
         qboolean (*VR_GetHandPose)(int hand, vec3_t trackingOffset, vec3_t angles, float *baseYaw);
 
+        /*
+         * The weapon wheel, for drawing it. True while it is held open, with
+         * the segment the controller is pointing at - or -1 for the dead zone
+         * in the middle, which chooses nothing.
+         */
+        qboolean (*VR_GetWheel)(int *selection, const char **names, int maxNames, int *count);
+
         cvar_t       *fsDebug;
         hdelement_t  *HudDrawElements;
         clientAnim_t *anim;

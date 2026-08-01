@@ -341,6 +341,10 @@ static void VR_BindFramebuffer(GLuint framebuffer)
 	glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
 }
 
+// About a quarter second at 90Hz - long enough to contain a throw, short
+// enough that the previous one has aged out.
+#define VR_THROW_SAMPLES 24
+
 typedef struct {
 	XrSwapchain     handle;
 	uint32_t        width;
@@ -425,6 +429,7 @@ static struct {
 	XrAction        duckAction;
 	qboolean        duckWasDown;
 	XrAction        useAction;
+	XrAction        wheelAction;
 	qboolean        useWasDown;
 	XrPath          handPaths[2];
 	XrSpace         aimSpaces[2];
@@ -567,12 +572,109 @@ static struct {
 	qboolean        reloadWasDown;
 	qboolean        reloadRelease;
 	int             reloadPressedAt;
+
+	// Climbing. Both grips, because a ladder is climbed hand over hand and
+	// which hand reaches next is the player's business.
+	//
+	// The anchor is where the hand was when it closed on the rung, and it is
+	// re-taken every time the pull is read: what the game wants is how far the
+	// hand dragged since it last asked, not since it grabbed. Reporting the
+	// total instead would apply the whole pull again on every frame.
+	qboolean        climbing;
+	qboolean        gripHeld[2];
+	vec3_t          climbAnchor[2];
+	qboolean        climbAnchored[2];
+
+	// Holsters. Which zone each hand was in when it last closed, so that
+	// letting go somewhere else does not put the weapon back.
+	int             holsterDrawn[2];
+	qboolean        gripWasDown[2];
+
+	// Whether there is a weapon in hand, told by the client, and which holster
+	// it came out of - so that reaching back to the same place puts it away
+	// rather than drawing it again.
+	qboolean        armed;
+	int             currentHolster;
+
+	// Hand velocity, for throwing. Smoothed over a few frames because a single
+	// frame's difference is mostly tracking noise, and a grenade that leaves
+	// the hand at whatever the last 11ms happened to say goes anywhere.
+	vec3_t          handVel[2];
+	vec3_t          handVelPrev[2];
+	int             handVelTime[2];
+
+	// A short history of it, because a throw is the fastest instant of the
+	// swing and not the speed at the moment the hand opens. By then the arm is
+	// already slowing down and, on a follow through, already turning - which is
+	// why averaging across the release sends the grenade somewhere between
+	// where the arm was going and where it ended up.
+	vec3_t          handVelHist[2][VR_THROW_SAMPLES];
+	int             handVelHistAt[2];
+
+	// The weapon wheel. Held open, aimed with the controller, and what it is
+	// pointing at when it closes is what gets drawn.
+	qboolean        wheelOpen;
+	qboolean        wheelWasDown;
+	int             wheelOpenedAt;
+	float           wheelBaseYaw;
+	float           wheelBasePitch;
+	int             wheelSelection;
 } vr;
+
+//
+// Where the weapons live on the player's body.
+//
+// Reaching to a place on yourself and closing your hand is how Half-Life: Alyx
+// selects a weapon, and it works because the positions are on a body rather
+// than in a menu: the hand knows where its own hip is without being shown.
+//
+// Measured from the head, in engine units, in the frame the player's shoulders
+// are in. Up is negative here because these all sit below eye level except the
+// shoulders. A zone is a box rather than a sphere so that the hip zones can be
+// generous vertically - a hip is a long way down and people do not reach to a
+// precise height - while staying narrow across, which is what keeps left and
+// right apart.
+//
+// The classes are MOHAA's own (useweaponclass), so this needs no table of
+// weapon names and works with whatever the player happens to be carrying.
+//
+typedef struct {
+	const char *cmd;        // useweaponclass argument
+	const char *name;       // for the trace
+	float       forward;    // centre, engine units from the head
+	float       right;
+	float       up;
+	float       reach;      // half extents around that centre
+	float       reachUp;
+} vrHolster_t;
+
+//
+// The wheel carries every class the game has, including the two with nowhere
+// on the body to hang them. That is the point of having both: the body is for
+// the weapons worth reaching for without looking, the wheel is for the rest.
+//
+static const char *const vrWheelClasses[] = {
+	"pistol", "rifle", "smg", "mg", "grenade", "heavy"
+};
+
+static const vrHolster_t vrHolsters[] = {
+	// The sidearm at the right hip, where it is actually worn.
+	{ "pistol",  "right hip",      2.0f,  14.0f, -34.0f, 13.0f, 20.0f },
+	// Grenades on the other hip.
+	{ "grenade", "left hip",       2.0f, -14.0f, -34.0f, 13.0f, 20.0f },
+	// The long guns go over the shoulders, slung on the back - so behind the
+	// head, not beside it, which is what the negative forward is for.
+	{ "rifle",   "right shoulder", -12.0f,  12.0f, -2.0f, 14.0f, 16.0f },
+	{ "smg",     "left shoulder",  -12.0f, -12.0f, -2.0f, 14.0f, 16.0f },
+};
 
 static cvar_t *vr_traceTracking;
 static cvar_t *vr_traceFrame;
 static cvar_t *vr_captureEye;
 static cvar_t *vr_reloadTapMs;
+static cvar_t *vr_holsters;
+static cvar_t *vr_traceHolster;
+static cvar_t *vr_traceThrow;
 
 /*
 ==================
@@ -604,6 +706,8 @@ static qboolean VR_CheckResult(XrResult result, const char *what)
 #define XR_CHECK(call) VR_CheckResult((call), #call)
 
 static void VR_CreateActions(void);
+static qboolean VR_TryHolsterDraw(int hand);
+static void VR_UpdateWheel(void);
 static void VR_DestroySwapchain(vrSwapchain_t *swapchain);
 static void VR_CreateBeam(void);
 static void VR_DestroyBeam(void);
@@ -937,6 +1041,9 @@ qboolean VR_Init(void)
 	// How long the weapon hand grip may be held and still count as a tap
 	// for reload. The reference calls this vr_reloadtimeoutms.
 	vr_reloadTapMs = Cvar_Get("vr_reloadTapMs", "400", CVAR_ARCHIVE);
+	vr_holsters = Cvar_Get("vr_holsters", "1", CVAR_ARCHIVE);
+	vr_traceHolster = Cvar_Get("vr_traceHolster", "0", CVAR_ARCHIVE);
+	vr_traceThrow = Cvar_Get("vr_traceThrow", "0", CVAR_ARCHIVE);
 	vr_traceTracking = Cvar_Get("vr_traceTracking", "0", 0);
 	// On by default while the frame budget is still an open question; there is
 	// no console in the headset to turn it on with when it is wanted.
@@ -1682,6 +1789,13 @@ static void VR_CreateActions(void)
 		return;
 	}
 
+	Q_strncpyz(actionInfo.actionName, "wheel", sizeof(actionInfo.actionName));
+	Q_strncpyz(actionInfo.localizedActionName, "Weapon wheel", sizeof(actionInfo.localizedActionName));
+
+	if (!XR_CHECK(xrCreateAction(vr.actionSet, &actionInfo, &vr.wheelAction))) {
+		return;
+	}
+
 	for (i = 0; i < (int)ARRAY_LEN(profiles); i++) {
 		const char *hands[2] = { "left", "right" };
 		uint32_t    count = 0;
@@ -1713,11 +1827,20 @@ static void VR_CreateActions(void)
 				}
 
 				// The upper face button on either hand: Y on the left, B on the
-				// right. Both, because which hand is free depends on which one
-				// the player is wearing the panel on.
+				// right. They do different things now - the objectives list on
+				// the left, use on the right.
+				//
+				// Use is on B, the weapon hand's button. That is where the
+				// reference puts it too (+activate on the dominant controller),
+				// and opening a door or manning a gun is the same hand that
+				// would be reaching for it.
+				//
+				// The objectives list keeps the left hand's button, so it did
+				// not lose its home - it used to be bound to both hands, which
+				// was a button spent twice on the same rarely opened screen.
 				Com_sprintf(path, sizeof(path), "/user/hand/%s/input/%s/click",
 					hands[hand], (hand == 0) ? "y" : "b");
-				bindings[count].action = vr.objectivesAction;
+				bindings[count].action = (hand == 0) ? vr.objectivesAction : vr.useAction;
 				if (XR_SUCCEEDED(xrStringToPath(vr.instance, path, &bindings[count].binding))) {
 					count++;
 				}
@@ -1730,12 +1853,16 @@ static void VR_CreateActions(void)
 					count++;
 				}
 
-				// Duck goes on the left stick, since the four face buttons are
-				// spoken for and pressing the stick down to crouch is at least a
-				// gesture in the right direction. Use goes on the right one:
-				// opening doors belongs with the hand that holds the weapon.
+				// Duck goes on the left stick: pressing the stick down to crouch
+				// is at least a gesture in the right direction.
+				//
+				// The right stick click carries the weapon wheel, which is
+				// where the reference puts it: Half-Life: Alyx opens its wheel
+				// on a hold of the dominant thumbstick and holsters on a tap of
+				// the same. That is why this button was left free when use
+				// moved off it.
 				Com_sprintf(path, sizeof(path), "/user/hand/%s/input/thumbstick/click", hands[hand]);
-				bindings[count].action = (hand == 0) ? vr.duckAction : vr.useAction;
+				bindings[count].action = (hand == 0) ? vr.duckAction : vr.wheelAction;
 				if (XR_SUCCEEDED(xrStringToPath(vr.instance, path, &bindings[count].binding))) {
 					count++;
 				}
@@ -2297,7 +2424,34 @@ void VR_UpdateInput(void)
 		down = (XR_SUCCEEDED(xrGetActionStateBoolean(vr.session, &getInfo, &state))
 			&& state.isActive && state.currentState) ? qtrue : qfalse;
 
-		if (down && !vr.reloadWasDown) {
+		vr.gripHeld[1] = down;
+
+		//
+		// On a ladder this grip is holding a rung, not reloading. Both meanings
+		// at once would have the player reload every time they let go to reach
+		// for the next rung, because a quick grab and release is exactly what
+		// the tap detector is looking for.
+		//
+		// The press time is kept up to date while climbing rather than frozen,
+		// so that letting go at the top is measured from then and not from
+		// wherever on the ladder the hand last closed.
+		//
+		if (down && !vr.gripWasDown[1]) {
+			// A grip closing on a holster draws from it, and that squeeze is
+			// then spoken for - it must not also count as the tap that
+			// reloads, or drawing a pistol would reload it on the way out.
+			if (VR_TryHolsterDraw(1)) {
+				vr.holsterDrawn[1] = 1;
+			}
+		} else if (!down) {
+			vr.holsterDrawn[1] = -1;
+		}
+
+		vr.gripWasDown[1] = down;
+
+		if (vr.climbing || vr.holsterDrawn[1] >= 0) {
+			vr.reloadPressedAt = now;
+		} else if (down && !vr.reloadWasDown) {
 			vr.reloadPressedAt = now;
 		} else if (!down && vr.reloadWasDown) {
 			if (now - vr.reloadPressedAt < tapMs) {
@@ -2328,9 +2482,174 @@ void VR_UpdateInput(void)
 		memset(&state, 0, sizeof(state));
 		state.type = XR_TYPE_ACTION_STATE_BOOLEAN;
 
-		vr.stabiliseHeld = (XR_SUCCEEDED(xrGetActionStateBoolean(vr.session, &getInfo, &state))
+		vr.gripHeld[0] = (XR_SUCCEEDED(xrGetActionStateBoolean(vr.session, &getInfo, &state))
 			&& state.isActive && state.currentState) ? qtrue : qfalse;
+
+		// The off hand draws too. Reaching across to the other hip is how a
+		// second weapon gets held, and it is half of what makes this feel like
+		// a body rather than a menu.
+		if (vr.gripHeld[0] && !vr.gripWasDown[0]) {
+			VR_TryHolsterDraw(0);
+		}
+
+		vr.gripWasDown[0] = vr.gripHeld[0];
+
+		// Steadying a rifle with the off hand means nothing on a ladder, and
+		// the hand is busy holding on.
+		vr.stabiliseHeld = vr.climbing ? qfalse : vr.gripHeld[0];
 	}
+
+	VR_UpdateWheel();
+}
+
+/*
+==================
+VR_UpdateWheel
+
+The weapon wheel, taken from Half-Life: Alyx: hold the dominant thumbstick to
+open it, move the controller to pick a segment, release to draw that weapon -
+and a quick tap of the same stick, with no hold, puts the weapon away for a
+free hand.
+
+Selection is by where the controller is pointing rather than by the stick,
+because the thumb is already holding the stick down. The angles are measured
+from wherever the hand happened to be when the wheel opened, so it does not
+matter which way the player was facing or how they hold the controller; only
+the movement since counts.
+
+The wheel is drawn by cgame, which reads the selection back through
+VR_GetWheel. Nothing here knows what the player is carrying - the segments are
+weapon classes, and asking for one the player does not have simply does
+nothing, which is the same thing the console command does.
+==================
+*/
+#define VR_WHEEL_TAP_MS   250
+#define VR_WHEEL_DEADZONE 8.0f
+
+static void VR_UpdateWheel(void)
+{
+	XrActionStateGetInfo getInfo;
+	XrActionStateBoolean state;
+	qboolean             down;
+	const int            now = Sys_Milliseconds();
+
+	memset(&getInfo, 0, sizeof(getInfo));
+	getInfo.type = XR_TYPE_ACTION_STATE_GET_INFO;
+	getInfo.action = vr.wheelAction;
+
+	memset(&state, 0, sizeof(state));
+	state.type = XR_TYPE_ACTION_STATE_BOOLEAN;
+
+	{
+		const XrResult r = xrGetActionStateBoolean(vr.session, &getInfo, &state);
+
+		down = (XR_SUCCEEDED(r) && state.isActive && state.currentState) ? qtrue : qfalse;
+
+		// Says whether the runtime is delivering this action at all, which is a
+		// different question from whether the player is pressing it. isActive
+		// false means nothing is bound to it - the binding was suggested and
+		// not taken - and no amount of pressing will ever change currentState.
+		if (vr_traceHolster && vr_traceHolster->integer) {
+			static int  lastReport;
+			static qboolean lastActive = qfalse;
+			static XrBool32 lastState = 0;
+			const int   now2 = Sys_Milliseconds();
+
+			// Any change of the press itself, not just of whether it is
+			// bound. The first version of this only watched isActive and a
+			// five second heartbeat, which cannot tell "never pressed" from
+			// "pressed between two heartbeats" - the exact distinction needed.
+			if (state.currentState != lastState
+				|| state.isActive != lastActive || now2 - lastReport > 5000) {
+				lastState = state.currentState;
+				lastActive = state.isActive;
+				lastReport = now2;
+				Com_Printf("VR wheel: result %d active %d state %d\n",
+					(int)r, (int)state.isActive, (int)state.currentState);
+			}
+		}
+	}
+
+	if (down && !vr.wheelWasDown) {
+		vr.wheelOpenedAt = now;
+		vr.wheelBaseYaw = vr.handYawLead[1];
+		vr.wheelBasePitch = vr.handPitch[1];
+		vr.wheelSelection = -1;
+		vr.wheelOpen = qtrue;
+	} else if (down) {
+		// Only count it as open once it has been held past the tap window, so
+		// that a tap never flashes the wheel up on the way past.
+		if (now - vr.wheelOpenedAt >= VR_WHEEL_TAP_MS) {
+			float dYaw = AngleSubtract(vr.handYawLead[1], vr.wheelBaseYaw);
+			float dPitch = vr.handPitch[1] - vr.wheelBasePitch;
+			float dist = sqrtf(dYaw * dYaw + dPitch * dPitch);
+
+			if (dist < VR_WHEEL_DEADZONE) {
+				// Still in the middle: nothing chosen, so releasing here keeps
+				// the weapon that is already in hand.
+				vr.wheelSelection = -1;
+			} else {
+				// Screen up is negative pitch, and the segments are numbered
+				// clockwise from straight up.
+				float angle = RAD2DEG(atan2f(dYaw, -dPitch));
+				int   count = (int)ARRAY_LEN(vrWheelClasses);
+				int   seg;
+
+				if (angle < 0.0f) {
+					angle += 360.0f;
+				}
+
+				seg = (int)((angle + (180.0f / count)) / (360.0f / count));
+				vr.wheelSelection = seg % count;
+			}
+		}
+	} else if (vr.wheelWasDown) {
+		if (now - vr.wheelOpenedAt < VR_WHEEL_TAP_MS) {
+			// A tap. Put it away rather than swapping it, which is what the
+			// reference does and what makes the free hand worth having.
+			Cbuf_AddText("holster\n");
+		} else if (vr.wheelSelection >= 0) {
+			Cbuf_AddText(va("useweaponclass %s\n", vrWheelClasses[vr.wheelSelection]));
+		}
+
+		vr.wheelOpen = qfalse;
+		vr.wheelSelection = -1;
+	}
+
+	vr.wheelWasDown = down;
+}
+
+/*
+==================
+VR_GetWheel
+
+What cgame needs to draw the wheel: whether it is up, and which segment is
+under the controller. Returns false when it is closed, and cgame draws nothing.
+==================
+*/
+qboolean VR_GetWheel(int *selection, const char **names, int maxNames, int *count)
+{
+	int i;
+
+	if (!vr.enabled || !vr.wheelOpen) {
+		return qfalse;
+	}
+
+	if (selection) {
+		*selection = vr.wheelSelection;
+	}
+
+	if (count) {
+		*count = (int)ARRAY_LEN(vrWheelClasses);
+	}
+
+	if (names) {
+		for (i = 0; i < (int)ARRAY_LEN(vrWheelClasses) && i < maxNames; i++) {
+			names[i] = vrWheelClasses[i];
+		}
+	}
+
+	return qtrue;
 }
 
 /*
@@ -2459,6 +2778,42 @@ qboolean VR_GetInput(vrInput_t *input)
 		input->stepForward = delta[0];
 		// The engine's second axis points left, the usercmd's rightmove right.
 		input->stepRight = -delta[1];
+	}
+
+	// Hand velocity for throwing, taken once both hands have been located.
+	{
+		const int now = Sys_Milliseconds();
+		int       hand;
+
+		for (hand = 0; hand < 2; hand++) {
+			const int dt = now - vr.handVelTime[hand];
+
+			if (!vr.handOffsetValid[hand]) {
+				VectorClear(vr.handVel[hand]);
+				vr.handVelTime[hand] = 0;
+				continue;
+			}
+
+			if (vr.handVelTime[hand] && dt > 0 && dt < 200) {
+				vec3_t delta, sample;
+
+				VectorSubtract(vr.handTracking[hand], vr.handVelPrev[hand], delta);
+				VectorScale(delta, 1000.0f / (float)dt, sample);
+
+				// Lightly smoothed against the frame before, which takes the
+				// worst of the tracking noise out without blunting the peak -
+				// then kept, so the throw can be read off the whole swing
+				// rather than off whichever frame the hand happened to open on.
+				VectorScale(vr.handVel[hand], 0.5f, vr.handVel[hand]);
+				VectorMA(vr.handVel[hand], 0.5f, sample, vr.handVel[hand]);
+
+				VectorCopy(vr.handVel[hand], vr.handVelHist[hand][vr.handVelHistAt[hand]]);
+				vr.handVelHistAt[hand] = (vr.handVelHistAt[hand] + 1) % VR_THROW_SAMPLES;
+			}
+
+			VectorCopy(vr.handTracking[hand], vr.handVelPrev[hand]);
+			vr.handVelTime[hand] = now;
+		}
 	}
 
 	// The eye views already carry the recentred orientation, so read the
@@ -2695,6 +3050,363 @@ qboolean VR_GetWeaponAim(vec3_t out)
 	out[ROLL]  = 0.0f;
 	return qtrue;
 }
+
+/*
+==================
+VR_GetHeadOffset
+
+Where the head is within the play space, measured from the tracking origin, in
+engine units and the engine's frame.
+
+This is the same quantity R_VRComposeView adds to the view origin to make the
+camera, and it is reported the same way the hands are: raw, with the base yaw
+alongside, so the caller composes it in the body's frame rather than being
+handed a vector that is only correct for one heading.
+
+The game needs it because the player's eye position in the player state is the
+*body's* eye - origin plus the fixed view height - and the camera is not there.
+Anything the game traces from the eye to work out what the player is looking at
+is therefore aimed from a point the player is not looking from. It is small
+while the body keeps up with the head, and it is not small in exactly the case
+that matters: leaning through a doorway to reach something, where the body is
+stopped by the wall and the head is not.
+
+Taken from the left eye rather than a true head centre, which puts it half an
+interpupillary distance off - about 3 units, well inside the tolerance of
+anything asking this question.
+==================
+*/
+qboolean VR_GetHeadOffset(vec3_t out, float *baseYaw)
+{
+	if (!vr.enabled || !vr.viewsValid) {
+		return qfalse;
+	}
+
+	VectorCopy(vr.eyeViews[0].origin, out);
+
+	if (baseYaw) {
+		*baseYaw = vr.baseYaw;
+	}
+
+	return qtrue;
+}
+
+/*
+==================
+VR_SetClimbing
+
+Told by the client when the player is on a ladder, because the grips mean
+something else there and the VR layer cannot see the player state to know.
+==================
+*/
+static int VR_HolsterZone(int hand, vec3_t bodyRel)
+{
+	vec3_t rel, headAngles;
+	float  radians, c, s;
+	int    i;
+
+	VectorClear(bodyRel);
+
+	if (!vr.handOffsetValid[hand] || !vr.viewsValid) {
+		return -1;
+	}
+
+	// Where the hand is relative to the head, both being measured from the
+	// same tracking origin.
+	VectorSubtract(vr.handTracking[hand], vr.eyeViews[0].origin, rel);
+
+	// Then into the frame the player's shoulders are in. The play space has an
+	// arbitrary forward and the player turns within it, so a hip fixed in play
+	// space would wander around the body as they turned. Taking the head's
+	// heading back off pins these to the player instead of to the room.
+	//
+	// The head's heading rather than the body's: a snap turn moves both
+	// together, and within a turn it is the shoulders that the hands are
+	// reaching relative to.
+	vectoangles(vr.eyeViews[0].axis[0], headAngles);
+
+	radians = -headAngles[YAW] * (float)M_PI / 180.0f;
+	c = cosf(radians);
+	s = sinf(radians);
+
+	bodyRel[0] = rel[0] * c - rel[1] * s;
+	bodyRel[1] = rel[0] * s + rel[1] * c;
+	bodyRel[2] = rel[2];
+
+	for (i = 0; i < (int)ARRAY_LEN(vrHolsters); i++) {
+		const vrHolster_t *h = &vrHolsters[i];
+
+		// The engine's second axis points left and these are written as if
+		// right were positive, which reads the way a person describes their own
+		// body. Hence the negation rather than a sign flip in the table.
+		if (fabsf(bodyRel[0] - h->forward) <= h->reach
+			&& fabsf(-bodyRel[1] - h->right) <= h->reach
+			&& fabsf(bodyRel[2] - h->up) <= h->reachUp) {
+			return i;
+		}
+	}
+
+	return -1;
+}
+
+/*
+==================
+VR_TryHolsterDraw
+
+A grip closing on a holster draws from it. Returns true when it did, so the
+caller leaves the grip's other meaning alone - the same squeeze cannot both
+draw a pistol and reload the rifle it replaced.
+==================
+*/
+static qboolean VR_TryHolsterDraw(int hand)
+{
+	vec3_t bodyRel;
+	int    zone;
+
+	if (vr.climbing) {
+		// Both hands are holding a ladder.
+		return qfalse;
+	}
+
+	if (vr_holsters && !vr_holsters->integer) {
+		return qfalse;
+	}
+
+	zone = VR_HolsterZone(hand, bodyRel);
+
+	if (vr_traceHolster && vr_traceHolster->integer) {
+		Com_Printf("VR holster: %s hand grip at fwd %.0f right %.0f up %.0f -> %s\n",
+			hand ? "weapon" : "off",
+			bodyRel[0], -bodyRel[1], bodyRel[2],
+			(zone >= 0) ? vrHolsters[zone].name : "nothing");
+	}
+
+	if (zone < 0) {
+		return qfalse;
+	}
+
+	//
+	//  Reaching back to the place the weapon came from puts it away; reaching
+	//  anywhere else swaps to whatever lives there.
+	//
+	//  That distinction is what makes this feel like a body rather than a
+	//  shortcut. Putting a rifle back over the shoulder is the same movement
+	//  as taking it off, run backwards, and it should be - but it must not
+	//  cost a second gesture to swap weapons, which is what holstering on any
+	//  zone would do.
+	//
+	//  currentHolster is -1 for a weapon that arrived some other way, a level
+	//  handing one over at spawn being the usual case. Reaching to that
+	//  weapon's own zone then draws it again, which is a harmless no-op -
+	//  the alternative is teaching this layer what every weapon class is, for
+	//  a case that corrects itself the first time the player holsters.
+	//
+	if (vr.armed && zone == vr.currentHolster) {
+		Cbuf_AddText("holster\n");
+		vr.currentHolster = -1;
+	} else {
+		Cbuf_AddText(va("useweaponclass %s\n", vrHolsters[zone].cmd));
+		vr.currentHolster = zone;
+	}
+
+	vr.holsterDrawn[hand] = zone;
+	return qtrue;
+}
+
+/*
+==================
+VR_SetArmed
+
+Told by the client, which can see the player state. The VR layer needs it to
+know whether a hand arriving at a holster is coming to take something or to put
+something back.
+==================
+*/
+void VR_SetArmed(qboolean armed)
+{
+	vr.armed = armed;
+}
+
+/*
+==================
+VR_GetThrow
+
+How fast the weapon hand is moving, in engine units a second, in the play
+space's own frame - with the base yaw alongside so the caller turns it into the
+world the same way everything else here is turned.
+
+Not a direction and a strength: the whole vector, because a throw is aimed by
+the arm and there is nothing else to aim it with. Where the player is looking
+has no say, which is the point - throwing a grenade over a hedge while watching
+the hedge is a thing hands can do and a view direction cannot.
+
+False when the hand is barely moving, and the caller throws the way it always
+did rather than dropping the grenade at the player's feet.
+==================
+*/
+qboolean VR_GetThrow(vec3_t velocity, float *baseYaw)
+{
+	if (!vr.enabled || !vr.handOffsetValid[1]) {
+		return qfalse;
+	}
+
+	{
+		//
+		//  The peak of the forward swing, found by ignoring the wind up.
+		//
+		//  The natural gesture is: press the trigger, take the hand *back* to
+		//  ready the throw, swing forward, let go. That means the history at
+		//  release holds two fast passages going opposite ways, and the fastest
+		//  instant of the throw is not at the moment the hand opens - it is
+		//  somewhere before it, because the arm is already slowing by then.
+		//
+		//  A short window ending at release therefore reads the follow through,
+		//  and a long one reads whichever of the two passages was quicker,
+		//  which is often the wind up. Both were tried on device and both are
+		//  wrong in their own direction.
+		//
+		//  So: take the direction the hand was going as it let go, and then
+		//  find the fastest sample that agrees with it. The wind up points the
+		//  other way and is excluded by the dot product; the forward swing
+		//  survives, peak and all, wherever in the window it happened.
+		//
+		vec3_t      release;
+		float       best = 0.0f;
+		int         i;
+		const int   last = (vr.handVelHistAt[1] - 1 + VR_THROW_SAMPLES) % VR_THROW_SAMPLES;
+
+		VectorClear(velocity);
+		VectorCopy(vr.handVelHist[1][last], release);
+
+		if (VectorNormalize(release) < 0.0001f) {
+			return qfalse;
+		}
+
+		for (i = 0; i < VR_THROW_SAMPLES; i++) {
+			const float len = VectorLength(vr.handVelHist[1][i]);
+
+			if (len <= best) {
+				continue;
+			}
+
+			if (DotProduct(vr.handVelHist[1][i], release) <= 0.0f) {
+				// Going the other way: this is the wind up, not the throw.
+				continue;
+			}
+
+			best = len;
+			VectorCopy(vr.handVelHist[1][i], velocity);
+		}
+
+		if (best < 40.0f) {
+			return qfalse;
+		}
+
+		if (vr_traceThrow && vr_traceThrow->integer) {
+			Com_Printf("VR throw: peak %.0f u/s dir %.2f %.2f %.2f (play space)\n",
+				best, velocity[0] / best, velocity[1] / best, velocity[2] / best);
+		}
+	}
+
+	if (baseYaw) {
+		*baseYaw = vr.baseYaw;
+	}
+
+	return qtrue;
+}
+
+void VR_SetClimbing(qboolean climbing)
+{
+	int hand;
+
+	if (vr.climbing == climbing) {
+		return;
+	}
+
+	vr.climbing = climbing;
+
+	// Stepping on or off a ladder drops any grip that was being held, so that
+	// a grip already closed when the climb starts does not count as a grab
+	// made halfway up, and a hand still closed when it ends does not carry an
+	// anchor into the next thing it does.
+	for (hand = 0; hand < 2; hand++) {
+		vr.climbAnchored[hand] = qfalse;
+	}
+}
+
+/*
+==================
+VR_GetClimbPull
+
+How far the grabbing hands have dragged since this was last asked, in engine
+units and the engine's frame.
+
+The hand that is holding a rung is not moving through the world - the world is
+moving past it. So the body goes the other way by however far the hand travelled
+in the play space, which is what makes this a drag rather than a climb speed:
+pull down six inches and you rise six inches, stop and you stop, and hanging
+still leaves you hanging still.
+
+Both hands count, and with both closed the two are averaged rather than added.
+Adding them would climb at twice the rate for holding on with both hands, which
+is the opposite of what holding on with both hands means.
+
+The anchors are re-taken here rather than at the grab, so what comes back is the
+movement since the last read. Returning the distance from the grab instead would
+re-apply the whole pull on every frame.
+==================
+*/
+qboolean VR_GetClimbPull(vec3_t out)
+{
+	int hand;
+	int pulling = 0;
+
+	VectorClear(out);
+
+	if (!vr.enabled || !vr.climbing) {
+		return qfalse;
+	}
+
+	for (hand = 0; hand < 2; hand++) {
+		vec3_t delta;
+
+		if (!vr.handOffsetValid[hand]) {
+			// The hand went missing mid pull. Drop the anchor rather than
+			// measuring from a stale one, which would jerk the player the
+			// moment tracking came back.
+			vr.climbAnchored[hand] = qfalse;
+			continue;
+		}
+
+		if (!vr.gripHeld[hand]) {
+			vr.climbAnchored[hand] = qfalse;
+			continue;
+		}
+
+		if (!vr.climbAnchored[hand]) {
+			VectorCopy(vr.handTracking[hand], vr.climbAnchor[hand]);
+			vr.climbAnchored[hand] = qtrue;
+			continue;
+		}
+
+		VectorSubtract(vr.handTracking[hand], vr.climbAnchor[hand], delta);
+		VectorCopy(vr.handTracking[hand], vr.climbAnchor[hand]);
+
+		VectorAdd(out, delta, out);
+		pulling++;
+	}
+
+	if (!pulling) {
+		return qfalse;
+	}
+
+	if (pulling > 1) {
+		VectorScale(out, 0.5f, out);
+	}
+
+	return qtrue;
+}
+
 
 /*
 ==================

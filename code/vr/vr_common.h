@@ -171,6 +171,73 @@ caller must keep its existing aim in that case rather than firing at zero.
 qboolean VR_GetWeaponAim(vec3_t out);
 
 /*
+Where the head is within the play space, from the tracking origin, in engine
+units and the engine's frame, with the base yaw the caller needs to rotate it
+into the body's frame:
+
+	bodyAngles = (0, viewYaw - baseYaw, 0);
+	eye = playerStateEyePos + offset[i] * bodyAxis[i];
+
+That is the same composition R_VRComposeView uses to make the camera, and it
+has to be, or the answer is a point the player is not looking from.
+
+For the game rather than the renderer: the eye position in the player state is
+the body's, and the camera has the play space offset on top of it. A trace from
+the body's eye is aimed from the wrong place whenever the two have come apart,
+which is precisely when the body is against something and the head is not.
+
+False when there is no headset, and the caller keeps the eye position it has.
+*/
+qboolean VR_GetHeadOffset(vec3_t out, float *baseYaw);
+
+/*
+Whether the player is on a ladder. The client reads it out of the player state
+and tells the VR layer, which cannot see the player state and needs to know:
+the grips hold rungs there instead of steadying the rifle and reloading.
+*/
+void VR_SetClimbing(qboolean climbing);
+
+/*
+Whether the player has a weapon in hand. The client reads it out of the player
+state; the VR layer uses it to tell a hand reaching for a holster from a hand
+bringing something back to one.
+*/
+void VR_SetArmed(qboolean armed);
+
+/*
+The weapon hand's velocity, in engine units a second and the play space's
+frame, with the base yaw needed to rotate it into the world. For throwing:
+a grenade should leave the hand going where the hand was going.
+
+False when the hand is not moving enough to be a throw.
+*/
+qboolean VR_GetThrow(vec3_t velocity, float *baseYaw);
+
+/*
+How far the hands holding the ladder have dragged since this was last asked, in
+engine units and the engine's frame, measured in the play space.
+
+The body moves the other way by this much, which is what makes it a drag: pull
+down and you rise by the same distance, stop and you stop. Both hands averaged
+when both are holding on, so gripping with two hands does not climb twice as
+fast.
+
+False when nothing is being pulled, and the caller leaves the player where the
+climb animation put them.
+*/
+qboolean VR_GetClimbPull(vec3_t out);
+
+/*
+The weapon wheel's state, for cgame to draw. True while it is held open, with
+the segment the controller is pointing at in selection - or -1 for the dead
+zone in the middle, which selects nothing and leaves the weapon in hand.
+
+names is filled with the class name of each segment, clockwise from straight
+up, so the caller labels them without knowing what they are.
+*/
+qboolean VR_GetWheel(int *selection, const char **names, int maxNames, int *count);
+
+/*
 Where the weapon hand is, for the view model to hang off.
 
 Reports the weapon hand in exactly the frame VR_GetHandPose reports the other

@@ -509,6 +509,9 @@ typedef struct gameImport_s {
      * a dedicated server has no headset to ask and always answers false.
      */
     qboolean (*VR_GetWeaponAim)(vec3_t out);
+    qboolean (*VR_GetHeadOffset)(vec3_t out, float *baseYaw);
+    qboolean (*VR_GetClimbPull)(vec3_t out);
+    qboolean (*VR_GetThrow)(vec3_t velocity, float *baseYaw);
 
 
     unsigned int (*Client_NumPendingCommands)(int clientNum);
