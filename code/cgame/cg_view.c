@@ -761,6 +761,46 @@ void CG_EyeOffset(vec3_t *o_vOfs)
 
 void CG_EyeAngles(vec3_t *o_vAngles)
 {
+    //
+    // Added in OPM
+    //
+    //  These angles are what the *game* thinks the player is looking along -
+    //  they travel up in the usercmd as usereyes_t and end up as
+    //  Player::m_vViewAng, which is what the use trace is aimed with.
+    //
+    //  cg.refdefViewAngles is the wrong source for that in VR. It does not
+    //  only hold the view: CG_OffsetFirstPersonView overwrites it with the
+    //  player model's animated *head bone* orientation on the paths that place
+    //  the view from the world position, and whatever is left there when this
+    //  is sampled is what the game gets. Measured on device, that left a pitch
+    //  pinned between 73 and 86 degrees - very nearly straight down - so every
+    //  use press traced into the floor about 77 units below the player and
+    //  caught whatever trigger happened to be underfoot. It worked often
+    //  enough to look intermittent rather than broken.
+    //
+    //  The player state's view angles are the head's, and only the head's:
+    //  the client writes the headset's yaw and pitch into them every frame
+    //  (CL_VRMove), and nothing animated gets a say. No recoil kick or lean in
+    //  them either, which is right for reaching at a door handle.
+    //
+    //  Flat play keeps the old source. There the two agree except for kick and
+    //  lean, and changing where a desktop player's use is aimed is not what
+    //  this is for.
+    //
+    {
+        vec3_t vTracking, vHandAngles;
+        float  fBaseYaw = 0.0f;
+
+        if (cgi.VR_GetHandPose
+            && (cgi.VR_GetHandPose(0, vTracking, vHandAngles, &fBaseYaw)
+                || cgi.VR_GetHandPose(1, vTracking, vHandAngles, &fBaseYaw))) {
+            (*o_vAngles)[0] = cg.predicted_player_state.viewangles[0];
+            (*o_vAngles)[1] = cg.predicted_player_state.viewangles[1];
+            (*o_vAngles)[2] = cg.predicted_player_state.viewangles[2];
+            return;
+        }
+    }
+
     (*o_vAngles)[0] = cg.refdefViewAngles[0];
     (*o_vAngles)[1] = cg.refdefViewAngles[1];
     (*o_vAngles)[2] = cg.refdefViewAngles[2];
