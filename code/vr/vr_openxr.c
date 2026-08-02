@@ -4873,6 +4873,26 @@ qboolean VR_UseScreenLayer(void)
 		return qtrue;
 	}
 
+	// The stats screen the game raises when the player dies, and at the end of
+	// a mission, is neither of the above and so was drawn onto the player's
+	// face like the briefing used to be. Two separate reasons it slips past:
+	//
+	//   - cg_view.c raises it with UI_ShowMenu, which sends the widget a
+	//     showmenu event directly rather than going through MenuManager. The
+	//     menu never reaches either menu stack, so CurrentMenu() does not
+	//     return it and the test above cannot see it;
+	//   - statsscreen_failed.urc has its "fullscreen 1" line commented out. It
+	//     is a 640x480 overlay that the flat game draws over the live view, so
+	//     even if it were the current menu it would not answer yes.
+	//
+	// Intermission is what the game itself asks before putting the screen up,
+	// so it is the honest thing to ask here. It also covers mission success,
+	// the MOHTA mission_* screens and the multiplayer scoreboard, which are the
+	// same kind of content and have the same problem.
+	if (cl.snap.valid && (cl.snap.ps.pm_flags & PMF_INTERMISSION)) {
+		return qtrue;
+	}
+
 	return qfalse;
 }
 
