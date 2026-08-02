@@ -1512,6 +1512,18 @@ extern cvar_t	*r_fastsky;				// controls whether sky should be cleared or drawn
 extern cvar_t	*r_fastdlights;
 extern cvar_t	*r_drawSun;				// controls drawing of sun quad
 extern cvar_t	*r_dlightBacks;			// dlight non-facing surfaces for continuity
+// Added in OPM
+//  Reports what a muzzle flash or an explosion actually wrote into the dynamic
+//  lightmap, and at 2 paints it magenta. See R_TraceDlight in tr_light.c. Named
+//  with the port's other trace switches rather than r_, because it is turned on
+//  and off in misc/android/autoexec.cfg alongside them.
+extern cvar_t	*vr_traceDlight;
+// Added in OPM
+//  Whether dynamic lights are allowed to rewrite the world's lightmap at all.
+//  A workaround switch, not a feature - see the comment in R_RealDlightFace
+//  and docs/markdown/04-coding/05-dlights.md.
+extern cvar_t	*r_worldDlights;
+void	RB_TraceDlightBind(const shader_t *shader, const char *what);
 
 extern	cvar_t	*r_norefresh;			// bypasses the ref rendering
 extern	cvar_t	*r_drawentities;		// disable/enable entity rendering

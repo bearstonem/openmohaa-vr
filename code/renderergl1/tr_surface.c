@@ -375,6 +375,12 @@ void RB_SurfaceBeam( void )
 RB_SurfaceFace
 ==============
 */
+// Added in OPM - see the reports in the dlight branches of RB_SurfaceFace and
+// RB_DrawTerrainTris. Capped rather than deduplicated: the spread across
+// surfaces is the measurement. Restart to re-arm them.
+static int rb_terrainSpans;
+static int rb_faceSpans;
+
 void RB_SurfaceFace( srfSurfaceFace_t *surf ) {
 	int			i;
 	qboolean	needsNormal;
@@ -447,6 +453,41 @@ void RB_SurfaceFace( srfSurfaceFace_t *surf ) {
 			tess.texCoords[ndx][1][1] = v[6] + surf->lightmapOffset[1];
 			*(unsigned int*)&tess.vertexColors[ndx] = *(unsigned int*)&v[7];
 			tess.vertexDlightBits[ndx] = dlightBits;
+		}
+
+		//
+		// Added in OPM
+		//  Which rows of the atlas this face's texcoords actually reach. Only
+		//  the rows R_UploadDlights calls "rows N" are ever sent; past that the
+		//  texture keeps what it had, which is black. So a face running beyond
+		//  N is reading rows nothing wrote this frame - a black wall. The
+		//  offset it is shifted by is printed too, because that is the term
+		//  under suspicion. See RB_TraceDlightBind in tr_shade.c.
+		//
+		if (vr_traceDlight && vr_traceDlight->integer && rb_faceSpans < 24 && numPoints > 0) {
+			float sMin = 1.0e9f, sMax = -1.0e9f, tMin = 1.0e9f, tMax = -1.0e9f;
+			int   n;
+
+			for (n = 0, ndx = tess.numVertexes; n < numPoints; n++, ndx++) {
+				const float s = tess.texCoords[ndx][1][0];
+				const float t = tess.texCoords[ndx][1][1];
+
+				if (s < sMin) { sMin = s; }
+				if (s > sMax) { sMax = s; }
+				if (t < tMin) { tMin = t; }
+				if (t > tMax) { tMax = t; }
+			}
+
+			rb_faceSpans++;
+			ri.Printf(PRINT_ALL,
+				"dlight: face %d rows %.1f..%.1f cols %.1f..%.1f of 128,"
+				" offset %.4f,%.4f lm %dx%d at %d,%d map %d\n",
+				rb_faceSpans,
+				tMin * LIGHTMAP_SIZE, tMax * LIGHTMAP_SIZE,
+				sMin * LIGHTMAP_SIZE, sMax * LIGHTMAP_SIZE,
+				surf->lightmapOffset[0], surf->lightmapOffset[1],
+				surf->lmWidth, surf->lmHeight, surf->lmX, surf->lmY,
+				tess.dlightMap);
 		}
 	}
 	else
@@ -831,9 +872,31 @@ void RB_DrawTerrainTris(srfTerrain_t* p) {
 
 	dlightBits = p->dlightBits[backEnd.smpFrame];
 	tess.dlightBits |= dlightBits;
+
+	//
+	// Added in OPM
+	//  Terrain picks its texcoords off the patch's own flag while the atlas is
+	//  bound off the batch's tess.dlightMap, which comes from the sort key.
+	//  Those are two different pieces of state and nothing makes them agree, so
+	//  this asks whether they do. See RB_TraceDlightBind in tr_shade.c.
+	//
+	if (p->dlightMap[backEnd.smpFrame] != tess.dlightMap) {
+		RB_TraceDlightBind(tess.shader, "terrain patch and batch disagree");
+	}
+
 	if (p->dlightMap[backEnd.smpFrame])
 	{
 		float lmScale = (1.0 / LIGHTMAP_SIZE) / p->lmapStep;
+		//
+		// Added in OPM
+		//  Where in the atlas this patch's texcoords actually land. The atlas is
+		//  128 texels tall but only the rows R_UploadDlights reports as "rows N"
+		//  are ever sent; past that the texture holds whatever it held last,
+		//  which is black. So a patch whose t runs beyond N/128 is reading rows
+		//  nothing wrote to this frame, and that is a black patch of ground.
+		//  See RB_TraceDlightBind in tr_shade.c.
+		//
+		float sMin = 1.0e9f, sMax = -1.0e9f, tMin = 1.0e9f, tMax = -1.0e9f;
 
 		for (i = p->iVertHead; i; i = g_pVert[i].iNext) {
 			assert(tess.numVertexes < SHADER_MAX_VERTEXES);
@@ -843,6 +906,17 @@ void RB_DrawTerrainTris(srfTerrain_t* p) {
 			tess.texCoords[tess.numVertexes][0][1] = g_pVert[i].texCoords[0][1];
 			tess.texCoords[tess.numVertexes][1][0] = g_pVert[i].xyz[0] * lmScale + p->lmapX;
 			tess.texCoords[tess.numVertexes][1][1] = g_pVert[i].xyz[1] * lmScale + p->lmapY;
+
+			if (vr_traceDlight && vr_traceDlight->integer) {
+				const float s = tess.texCoords[tess.numVertexes][1][0];
+				const float t = tess.texCoords[tess.numVertexes][1][1];
+
+				if (s < sMin) { sMin = s; }
+				if (s > sMax) { sMax = s; }
+				if (t < tMin) { tMin = t; }
+				if (t > tMax) { tMax = t; }
+			}
+
 			tess.normal[tess.numVertexes][0] = 0;
 			tess.normal[tess.numVertexes][1] = 0;
 			tess.normal[tess.numVertexes][2] = 1.0;
@@ -853,6 +927,22 @@ void RB_DrawTerrainTris(srfTerrain_t* p) {
 
 			g_pVert[i].iVertArray = tess.numVertexes;
 			tess.numVertexes++;
+		}
+
+		// Added in OPM - see above. Capped rather than deduplicated by shader:
+		// the spread across patches is the measurement, and every one of them
+		// is the same shader. Restart to re-arm it.
+		if (vr_traceDlight && vr_traceDlight->integer && sMax >= sMin
+			&& rb_terrainSpans < 24) {
+			rb_terrainSpans++;
+			ri.Printf(PRINT_ALL,
+				"dlight: terrain patch %d rows %.1f..%.1f cols %.1f..%.1f of 128,"
+				" step %g size %d, batch map %d patch map %d\n",
+				rb_terrainSpans,
+				tMin * LIGHTMAP_SIZE, tMax * LIGHTMAP_SIZE,
+				sMin * LIGHTMAP_SIZE, sMax * LIGHTMAP_SIZE,
+				p->lmapStep, p->lmapSize,
+				tess.dlightMap, p->dlightMap[backEnd.smpFrame]);
 		}
 	}
 	else

@@ -138,6 +138,25 @@ int R_RealDlightPatch(srfGridMesh_t *srf, int dlightBits)
     float      *origin;
     drawVert_t *dv;
 
+    //
+    // Added in OPM
+    //  Off, the world stops responding to dynamic lights entirely: no atlas
+    //  block for any surface, so tess.dlightMap stays 0 and the texcoords are
+    //  never shifted. Lights still exist and still light models and sprites -
+    //  only the world is left alone.
+    //
+    //  This is a workaround, not a feature. A muzzle flash currently makes the
+    //  ground four times *darker* rather than lighting it, and the cause is
+    //  not found - see docs/markdown/04-coding/05-dlights.md for what was
+    //  measured and what is ruled out. Losing the flash lighting the scenery
+    //  is a smaller loss than the ground going black every time a shot is
+    //  fired, so it is off on the device until this is understood.
+    //
+    if (!r_worldDlights->integer) {
+        srf->dlightMap[tr.smpFrame] = 0;
+        return 0;
+    }
+
     if (!srf->lmHeight || !srf->lmWidth) {
         srf->dlightMap[tr.smpFrame] = 0;
         return 0;
@@ -304,6 +323,25 @@ int R_RealDlightFace(srfSurfaceFace_t *srf, int dlightBits)
     qboolean  added;
     float    *origin;
 
+    //
+    // Added in OPM
+    //  Off, the world stops responding to dynamic lights entirely: no atlas
+    //  block for any surface, so tess.dlightMap stays 0 and the texcoords are
+    //  never shifted. Lights still exist and still light models and sprites -
+    //  only the world is left alone.
+    //
+    //  This is a workaround, not a feature. A muzzle flash currently makes the
+    //  ground four times *darker* rather than lighting it, and the cause is
+    //  not found - see docs/markdown/04-coding/05-dlights.md for what was
+    //  measured and what is ruled out. Losing the flash lighting the scenery
+    //  is a smaller loss than the ground going black every time a shot is
+    //  fired, so it is off on the device until this is understood.
+    //
+    if (!r_worldDlights->integer) {
+        srf->dlightMap[tr.smpFrame] = 0;
+        return 0;
+    }
+
     if (!srf->lmHeight || !srf->lmWidth) {
         srf->dlightMap[tr.smpFrame] = 0;
         return 0;
@@ -403,6 +441,25 @@ int R_RealDlightTerrain(cTerraPatchUnpacked_t *srf, int dlightBits)
     float     heightPerLumelSquared;
     float     z00, z01;
     float     z10, z11;
+
+    //
+    // Added in OPM
+    //  Off, the world stops responding to dynamic lights entirely: no atlas
+    //  block for any surface, so tess.dlightMap stays 0 and the texcoords are
+    //  never shifted. Lights still exist and still light models and sprites -
+    //  only the world is left alone.
+    //
+    //  This is a workaround, not a feature. A muzzle flash currently makes the
+    //  ground four times *darker* rather than lighting it, and the cause is
+    //  not found - see docs/markdown/04-coding/05-dlights.md for what was
+    //  measured and what is ruled out. Losing the flash lighting the scenery
+    //  is a smaller loss than the ground going black every time a shot is
+    //  fired, so it is off on the device until this is understood.
+    //
+    if (!r_worldDlights->integer) {
+        srf->drawinfo.dlightMap[tr.smpFrame] = 0;
+        return 0;
+    }
 
     dli.numLights = 0;
 
@@ -1471,7 +1528,67 @@ void R_ClearRealDlights()
 {
     memset(dli.allocated, 0, sizeof(dli.allocated));
     dli.dlightMap = 0;
+
+    //
+    // Added in OPM
+    //  See R_TraceDlight. At 2 the whole atlas is stained green before the
+    //  front end writes anything into it, and every texel a light reaches is
+    //  then painted magenta over the top. Three outcomes, and each names a
+    //  different half of the pipe:
+    //
+    //    magenta on the walls - the patch, the upload and the sampling all
+    //                           work, and the black is whatever R_DlightSample
+    //                           computes for real;
+    //    green on the walls   - the atlas reaches the surface, but the surface
+    //                           reads a part of it nothing was written to, so
+    //                           the fault is in the texcoords or the offset;
+    //    still black          - the atlas is not reaching the surface at all,
+    //                           however bright it is, so the fault is the
+    //                           upload or the bind.
+    //
+    //  White, not a colour. A dark green stain was tried first and was a bad
+    //  choice in a level made of hedgerows - it could not be told apart from
+    //  foliage by eye, and on the device the areas in question turned out to
+    //  have R, G and B all roughly equal, which a modulate against a
+    //  green-only stain cannot produce. Full white can only make a surface
+    //  brighter, so anything reading the atlas outside a written patch becomes
+    //  unmissable and nothing else in the frame looks like it.
+    //
+    if (vr_traceDlight && vr_traceDlight->integer >= 2) {
+        int i;
+
+        for (i = 0; i < LIGHTMAP_SIZE * LIGHTMAP_SIZE; i++) {
+            dli.lightmap_buffer[i * 4 + 0] = 255;
+            dli.lightmap_buffer[i * 4 + 1] = 255;
+            dli.lightmap_buffer[i * 4 + 2] = 255;
+            dli.lightmap_buffer[i * 4 + 3] = 255;
+        }
+    }
 }
+
+/*
+===============
+R_TraceDlight
+
+Added in OPM, for the port.
+
+Muzzle flashes and explosions light the world by rewriting its lightmap, not by
+adding a pass over it - see R_UploadDlights below. So when they come out black
+on the surrounding surfaces there are only two places the black can be coming
+from: the patch this builds on the CPU, or what the GPU does with it.
+
+That is what this splits.
+
+1 reports what was actually uploaded. On the device that came back bright - peak
+548 of 765, over half the texels lit, no GL error - which rules the whole CPU
+half out and says the black is downstream of it.
+
+2 stains the atlas instead of measuring it, and is read off the walls rather
+than out of the log: see R_ClearRealDlights for what each colour means.
+===============
+*/
+cvar_t *vr_traceDlight;
+cvar_t *r_worldDlights;
 
 /*
 ===============
@@ -1482,10 +1599,24 @@ void R_UploadDlights()
 {
     int i, h;
 
-    if (!tr.pc.c_dlightSurfaces) {
-        return;
-    }
-
+    //
+    // Changed in OPM
+    //  There was a "if (!tr.pc.c_dlightSurfaces) return;" here. It is gone
+    //  because the height below is the same guard done properly: it comes from
+    //  dli.allocated, this allocator's own state, cleared per scene by
+    //  R_ClearRealDlights and again at the end of this function, and it is zero
+    //  exactly when the front end allocated nothing. tr.pc is the r_speeds
+    //  counter block, which R_PerformanceCounters clears on its own schedule -
+    //  nothing this depends on should be reading it.
+    //
+    //  Recorded because it is a tempting wrong answer: that clear happens in
+    //  R_IssueRenderCommands *before* the command list runs, which reads like
+    //  it must leave the count at zero by the time RB_BeginDrawingView gets
+    //  here, and therefore like the atlas is never uploaded at all. It is not
+    //  what happens. Measured on the device, this is reached with the count at
+    //  35 surfaces and the patch bright, so the guard was passing and was never
+    //  the reason muzzle flashes come out black.
+    //
     h = 0;
     for (i = 0; i < LIGHTMAP_SIZE; i++) {
         if (h < dli.allocated[i]) {
@@ -1500,6 +1631,77 @@ void R_UploadDlights()
 
         GL_Bind(tr.dlightImages[dli.dlightMap]);
         qglTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, LIGHTMAP_SIZE, h, GL_RGBA, GL_UNSIGNED_BYTE, dli.lightmap_buffer);
+
+        if (vr_traceDlight && vr_traceDlight->integer) {
+            //
+            // Added in OPM
+            //  This is the one moment in the frame that is known to have a
+            //  flash in it. VR_CaptureEye is otherwise on a two second timer
+            //  and has missed every flash it has been asked to catch, because
+            //  a muzzle flash lasts a frame or two. This tells it to take the
+            //  picture now. See VR_CaptureEye in vr_openxr.c.
+            //
+            ri.Cvar_Set("vr_flashFrame", "1");
+
+            //
+            // Added in OPM
+            //  Read after the call and not before, so it belongs to this
+            //  upload. GL_RGBA into a texture whose internal format came out
+            //  GL_RGB is legal on the desktop and is not on GL ES, and a
+            //  rejected sub-upload leaves the atlas holding whatever it had -
+            //  which is the difference between "the patch is wrong" and "the
+            //  patch never arrived", and cannot be told apart by looking.
+            //
+            const GLenum err   = qglGetError();
+            int          bright = 0;
+            int          peak   = 0;
+            int          x, y;
+
+            for (y = 0; y < h; y++) {
+                const byte *row = &dli.lightmap_buffer[y * LIGHTMAP_SIZE * 4];
+
+                for (x = 0; x < LIGHTMAP_SIZE; x++) {
+                    const int lum = row[x * 4 + 0] + row[x * 4 + 1] + row[x * 4 + 2];
+
+                    if (lum > peak) {
+                        peak = lum;
+                    }
+                    if (lum > 96) {
+                        bright++;
+                    }
+                }
+            }
+
+            ri.Printf(
+                PRINT_ALL,
+                "dlight: page %d rows %d surfaces %d texels %d | patch peak %d bright %d of %d |"
+                " internal 0x%x err 0x%x | overbright shift %d mult %.3f identity %.3f/%d\n",
+                dli.dlightMap,
+                h,
+                tr.pc.c_dlightSurfaces,
+                tr.pc.c_dlightTexels,
+                peak,
+                bright,
+                h * LIGHTMAP_SIZE,
+                tr.dlightImages[dli.dlightMap]->internalFormat,
+                (unsigned int)err,
+                //
+                // Added in OPM
+                //  The dynamic patch is built from the raw BSP lightmap bytes
+                //  and shifted by overbrightShift, while the static lightmap it
+                //  replaces was scaled by identityLight when it was uploaded.
+                //  Those are two different scales for the same quantity, and a
+                //  surface that swaps one for the other changes brightness by
+                //  the ratio between them - which is what the device shows,
+                //  the lit area coming out three to four times darker rather
+                //  than black.
+                //
+                tr.overbrightShift,
+                tr.overbrightMult,
+                tr.identityLight,
+                tr.identityLightByte
+            );
+        }
 
         tr.pc.c_dlightMaps++;
         memset(dli.allocated, 0, sizeof(dli.allocated));
@@ -1603,6 +1805,19 @@ qboolean R_DlightSample(byte *src, const vec3_t vec, byte *dst)
     dst[1] = (byte)g;
     dst[2] = (byte)b;
     dst[3] = -1;
+
+    //
+    // Added in OPM
+    //  Only the texels a light actually reached, so the magenta traces the
+    //  light's own footprint rather than the whole patch. Deliberately after
+    //  the real write and not instead of it: everything above still runs, so
+    //  this cannot change which surfaces get a dlight map or how big it is.
+    //
+    if (added && vr_traceDlight && vr_traceDlight->integer >= 2) {
+        dst[0] = 255;
+        dst[1] = 0;
+        dst[2] = 255;
+    }
 
     return added;
 }

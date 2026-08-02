@@ -377,6 +377,55 @@ because a surface may be forced to perform a RB_End due
 to overflow.
 ==============
 */
+/*
+===================
+RB_TraceDlightBind
+
+Added in OPM, for the port. See R_TraceDlight in tr_light.c.
+
+The lightmap texcoords are rewritten into the dynamic atlas's frame whenever
+tess.dlightMap is set - RB_SurfaceFace and RB_SurfaceGrid branch on that alone.
+The atlas is only *bound* in its place if the lightmap is in the particular
+bundle each stage iterator happens to look at. Where the two disagree, the
+surface reads the real lightmap atlas at dynamic atlas coordinates: it lands in
+the parts of it no lightmap was packed into, and those are black.
+
+That is the shape of what the device shows - large black areas beside small
+correct ones, when the atlas itself is measured bright and, stained, comes back
+as magenta and green in exactly the places that are not black.
+
+Per batch and not per stage: a single stage binding its own texture is normal,
+and only a batch that finishes without any stage having bound the atlas is
+wrong. One line per shader per run, because the list of names is the finding.
+===================
+*/
+static qboolean rb_dlightBound;
+
+void RB_TraceDlightBind(const shader_t *shader, const char *what)
+{
+	static const shader_t *seen[24];
+	static int             numSeen;
+	int                    i;
+
+	if (!vr_traceDlight || !vr_traceDlight->integer || !shader) {
+		return;
+	}
+
+	for (i = 0; i < numSeen; i++) {
+		if (seen[i] == shader) {
+			return;
+		}
+	}
+
+	if (numSeen >= (int)(sizeof(seen) / sizeof(seen[0]))) {
+		return;
+	}
+	seen[numSeen++] = shader;
+
+	ri.Printf(PRINT_ALL, "dlight: %s - \"%s\" (%d stages, lightmapIndex %d)\n",
+		what, shader->name, shader->numUnfoggedPasses, shader->lightmapIndex);
+}
+
 void RB_BeginSurface( shader_t *shader ) {
 	tess.numIndexes = 0;
 	tess.numVertexes = 0;
@@ -387,6 +436,8 @@ void RB_BeginSurface( shader_t *shader ) {
 	tess.numPasses = shader->numUnfoggedPasses;
 	tess.currentStageIteratorFunc = shader->optimalStageIteratorFunc;
 
+	// Added in OPM - see RB_TraceDlightBind.
+	rb_dlightBound = qfalse;
 }
 
 /*
@@ -490,6 +541,7 @@ static void DrawMultitextured( shaderCommands_t *input, int stage ) {
 		R_BindAnimatedImage(&pStage->bundle[1]);
 	} else {
 		GL_Bind(tr.dlightImages[input->dlightMap - 1]);
+		rb_dlightBound = qtrue;		// Added in OPM - see RB_TraceDlightBind
 	}
 
 	R_DrawElements( input->numIndexes, input->indexes );
@@ -549,6 +601,32 @@ static void ProjectDlightTexture( void ) {
 
 	if ( !backEnd.refdef.num_dlights ) {
 		return;
+	}
+
+	//
+	// Added in OPM, for the port. See R_TraceDlight in tr_light.c.
+	//
+	//  This is the other dynamic light path, and the one nothing has looked at
+	//  yet: Quake 3's, a second additive pass over the surface, used for every
+	//  surface the MOHAA atlas did not give a block to - allocation refused, no
+	//  light actually landing on a lumel, or a shader with no lightmap at all,
+	//  which in the Bocage is most of the foliage.
+	//
+	//  It draws the radial falloff texture, which is black at its edges, and it
+	//  is only not black on screen because the blend makes black contribute
+	//  nothing. If the blend is not in force, those triangles go opaque black -
+	//  which is the shape on the device, and the atlas path has now been
+	//  measured correct end to end, so this is what is left.
+	//
+	//  3 skips it. If the black goes with it, it is this pass; if it stays,
+	//  it is not, and that is worth as much.
+	//
+	if (vr_traceDlight && vr_traceDlight->integer >= 3) {
+		return;
+	}
+
+	if (vr_traceDlight && vr_traceDlight->integer) {
+		RB_TraceDlightBind(tess.shader, "drawn by the Quake 3 dlight pass, not the atlas");
 	}
 
 #if idppc_altivec
@@ -1514,6 +1592,7 @@ static void RB_IterateStagesGeneric( shaderCommands_t *input )
 			else {
 				if (input->dlightMap && tess.xstages[stage]->bundle[0].isLightmap) {
 					GL_Bind(tr.dlightImages[input->dlightMap - 1]);
+					rb_dlightBound = qtrue;		// Added in OPM - see RB_TraceDlightBind
 				}
 				else {
 					R_BindAnimatedImage(&pStage->bundle[0]);
@@ -1792,6 +1871,7 @@ void RB_StageIteratorLightmappedMultitextureUnfogged( void ) {
 	}
 	if (tess.dlightMap && tess.xstages[0]->bundle[1].isLightmap) {
 		GL_Bind(tr.dlightImages[tess.dlightMap - 1]);
+		rb_dlightBound = qtrue;		// Added in OPM - see RB_TraceDlightBind
 	} else {
 		R_BindAnimatedImage(&tess.xstages[0]->bundle[1]);
 	}
@@ -1880,6 +1960,15 @@ void RB_EndSurface( void ) {
 	// call off to shader specific tess end function
 	//
 	tess.currentStageIteratorFunc();
+
+	//
+	// Added in OPM
+	//  The texcoords went into the dynamic atlas's frame and nothing put the
+	//  atlas under them. See RB_TraceDlightBind.
+	//
+	if (tess.dlightMap && !rb_dlightBound) {
+		RB_TraceDlightBind(tess.shader, "texcoords shifted, atlas never bound");
+	}
 
 	if (!(tr.refdef.rdflags & RDF_NOWORLDMODEL) && !backEnd.in2D)
 	{

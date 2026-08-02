@@ -1423,6 +1423,16 @@ void R_Register( void )
 	r_fastdlights = ri.Cvar_Get("r_fastdlights", "0", CVAR_ARCHIVE | CVAR_LATCH);
 	r_drawSun = ri.Cvar_Get( "r_drawSun", "0", CVAR_ARCHIVE );
 	r_dlightBacks = ri.Cvar_Get( "r_dlightBacks", "1", CVAR_ARCHIVE );
+	// Added in OPM
+	//  Deliberately not CVAR_ARCHIVE: a diagnostic that survives into the next
+	//  run is one that gets left on. See R_TraceDlight in tr_light.c.
+	vr_traceDlight = ri.Cvar_Get( "vr_traceDlight", "0", 0 );
+	// Added in OPM
+	//  Defaults on, which is the engine's own behaviour. It is turned off in
+	//  misc/android/autoexec.cfg, and only there, because the bug it works
+	//  around has only ever been seen on the device. See
+	//  docs/markdown/04-coding/05-dlights.md.
+	r_worldDlights = ri.Cvar_Get( "r_worldDlights", "1", CVAR_ARCHIVE );
 	r_finish = ri.Cvar_Get ("r_finish", "0", CVAR_ARCHIVE);
 	r_textureMode = ri.Cvar_Get( "r_textureMode", "gl_linear_mipmap_linear", CVAR_ARCHIVE );
 	r_swapInterval = ri.Cvar_Get( "r_swapInterval", "0", CVAR_ARCHIVE | CVAR_LATCH );

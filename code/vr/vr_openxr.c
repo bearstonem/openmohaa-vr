@@ -4112,11 +4112,26 @@ static void VR_CaptureEye(int eye)
 		return;
 	}
 
-	now = Sys_Milliseconds();
-	if (now - lastShot < 2000) {
-		return;
+	//
+	// A muzzle flash lasts a frame or two, and a shot every two seconds has now
+	// missed every one it was asked to catch - six captures in a row of a scene
+	// with no flash in it. The renderer raises this on the frames that actually
+	// have a dynamic light in them, which is exactly the set worth keeping, so
+	// those jump the timer. See R_UploadDlights in tr_light.c.
+	//
+	{
+		cvar_t *flash = Cvar_Get("vr_flashFrame", "0", 0);
+
+		if (flash && flash->integer) {
+			Cvar_Set("vr_flashFrame", "0");
+		} else {
+			now = Sys_Milliseconds();
+			if (now - lastShot < 2000) {
+				return;
+			}
+			lastShot = now;
+		}
 	}
-	lastShot = now;
 
 	rgba = malloc((size_t)w * h * 4);
 	bgr  = malloc((size_t)w * h * 3 + sizeof(header));

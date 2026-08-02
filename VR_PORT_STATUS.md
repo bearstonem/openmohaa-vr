@@ -269,6 +269,22 @@ that every crash reported four frames of the handler and nothing else.
 
 ## 4. Known problems
 
+**A muzzle flash makes the ground darker, so the world's dynamic lighting is
+off.** `r_worldDlights 0` in `autoexec.cfg`. Firing multiplies roughly a sixth
+of the screen down by about 4× for as long as the trigger is held — the ground
+plane, with hard polygon edges. Unsolved after seven wrong theories; every
+component of the dynamic lightmap path measures correct end to end, and yet
+switching the path off makes the symptom stop. Losing flashes lighting the
+scenery is the smaller loss. The measurements, what is ruled out and where to
+resume are in `docs/markdown/04-coding/05-dlights.md`.
+
+The lesson worth carrying beyond this bug: **difference the frames first.**
+Pulling a capture, extracting every frame and differencing a flash frame against
+its neighbour gave the cadence, the 4× ratio and the affected geometry in one
+step, after six rounds of reading the renderer had given nothing. Also, never
+record video and read the log in the same run — the Quest's recorder floods
+logcat and evicts everything.
+
 **It does not hold 90 Hz while moving.** `vr_resolutionScale` is now 1, so the
 eyes render at the full 1680×1760, and the frame budget is spent:
 
