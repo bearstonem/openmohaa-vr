@@ -105,11 +105,17 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // legible through a lens.
 #define VRHUD_TEXT_SCALE  1.15f
 
+// How long the group takes to go once its time is up. Long enough to read as a
+// fade rather than a cut, short enough not to sit in the way.
+#define VRHUD_FADE_MS     600.0f
+
 typedef struct {
     qboolean  registered;
     qhandle_t compassBack;
     qhandle_t compassFace;
     qhandle_t compassNeedle;
+    qhandle_t compassObj;
+    qhandle_t compassPain;
     qhandle_t weapPistol;
     qhandle_t weapRifle;
     qhandle_t weapSmg;
@@ -145,6 +151,8 @@ static void CG_VRHudRegister(void)
     vrHud.compassBack   = cgi.R_RegisterShaderNoMip("textures/hud/compassback");
     vrHud.compassFace   = cgi.R_RegisterShaderNoMip("textures/hud/compassface");
     vrHud.compassNeedle = cgi.R_RegisterShaderNoMip("textures/hud/compassneedle");
+    vrHud.compassObj    = cgi.R_RegisterShaderNoMip("textures/hud/compassobjarrow");
+    vrHud.compassPain   = cgi.R_RegisterShaderNoMip("textures/hud/compasspain");
     vrHud.weapPistol  = cgi.R_RegisterShaderNoMip("textures/hud/weap_pistol");
     vrHud.weapRifle   = cgi.R_RegisterShaderNoMip("textures/hud/weap_rifle");
     vrHud.weapSmg     = cgi.R_RegisterShaderNoMip("textures/hud/weap_smg");
@@ -441,6 +449,47 @@ static void CG_VRHudCompass(float alpha)
     );
 
     //
+    // Which way the last hit came from, fading out over a second and a half.
+    //
+    // The retail ring is "statbar headingspinner 0 3600" over stats
+    // [STAT_DAMAGEDIR], and headingspinner is the variant that does subtract
+    // the view angles - unlike the objective below - so the direction is in
+    // world terms and has to be brought round to the head. DrawStatSpinner
+    // does it as AngleSubtract(yaw, raw*360 + 180), and the +180 is because the
+    // stat points at the attacker while the ring marks where the damage
+    // arrived.
+    //
+    // The fade is its own timer rather than anything the stat carries: the
+    // widget starts it whenever the value changes and runs it down over 1500ms.
+    //
+    {
+        static int   painStat = -1;
+        static int   painTime;
+        const int    stat = cg.snap->ps.stats[STAT_DAMAGEDIR];
+
+        if (stat != painStat) {
+            painStat = stat;
+            painTime = cg.time;
+        }
+
+        if (painTime && cg.time - painTime < 1500) {
+            const float fade = 1.0f - (cg.time - painTime) / 1500.0f;
+            float       frac = (AngleSubtract(eyeAngles[YAW], (stat / 3600.0f) * 360.0f + 180.0f) + 180.0f) / 360.0f;
+
+            if (frac >= 0.0f && frac <= 1.0f) {
+                CG_VRHudRotatedPic(
+                    VRHUD_RING_CX,
+                    VRHUD_RING_CY,
+                    VRHUD_RING_R * 0.94f,
+                    frac * 360.0f - 180.0f,
+                    vrHud.compassPain,
+                    alpha * fade
+                );
+            }
+        }
+    }
+
+    //
     // The objective, before the needle so the needle stays on top of it.
     //
     // stats[STAT_OBJECTIVECENTER] is already relative to where the player is
@@ -451,12 +500,14 @@ static void CG_VRHudCompass(float alpha)
     // -180 to 180.
     //
     if (cg.snap->ps.stats[STAT_OBJECTIVECENTER]) {
-        const float theta = DEG2RAD(cg.snap->ps.stats[STAT_OBJECTIVECENTER] / 10.0f - 180.0f);
-        const float px    = VRHUD_RING_CX + sin(theta) * VRHUD_RING_R * 0.78f;
-        const float py    = VRHUD_RING_CY - cos(theta) * VRHUD_RING_R * 0.78f;
-
-        CG_VRHudFill(px - 3.5f, py - 3.5f, 7.0f, 7.0f, 0.1f, 0.1f, 0.1f, alpha);
-        CG_VRHudFill(px - 2.5f, py - 2.5f, 5.0f, 5.0f, 1.0f, 0.85f, 0.1f, alpha);
+        CG_VRHudRotatedPic(
+            VRHUD_RING_CX,
+            VRHUD_RING_CY,
+            VRHUD_RING_R * 0.94f,
+            cg.snap->ps.stats[STAT_OBJECTIVECENTER] / 10.0f - 180.0f,
+            vrHud.compassObj,
+            alpha
+        );
     }
 
     //
@@ -535,6 +586,7 @@ exactly the kind of thing that can only be judged with it on.
 void CG_DrawVRHud(void)
 {
     float alpha;
+    float fade;
     float health, maxHealth;
     float clip, maxClip;
     int   i;
@@ -548,6 +600,37 @@ void CG_DrawVRHud(void)
         return;
     }
 
+    //
+    // Added in OPM
+    //  Up on request, not all the time.
+    //
+    //  A HUD that is always there is always in the way, and almost all of what
+    //  this one carries is only wanted at the moment it is asked for - how much
+    //  ammo is left, which way the objective is. So it is hidden, and the off
+    //  hand's X button brings it up for vr_hudTime seconds before it fades.
+    //
+    //  vr_hudShow is a timestamp the VR layer writes when the button goes down,
+    //  on the same clock cgi.Milliseconds reads, so nothing has to be latched
+    //  or cleared here and a press during the fade simply starts it again.
+    //
+    //  vr_hud 2 pins it up, which is what to use while arguing with the layout.
+    //
+    fade = 1.0f;
+
+    if (vr_hud->integer != 2) {
+        const float hold = (vr_hudTime ? vr_hudTime->value : 3.0f) * 1000.0f;
+        const int   shown = vr_hudShow ? vr_hudShow->integer : 0;
+        const int   since = cgi.Milliseconds() - shown;
+
+        if (!shown || since < 0 || since > hold + VRHUD_FADE_MS) {
+            return;
+        }
+
+        if (since > hold) {
+            fade = 1.0f - (since - hold) / VRHUD_FADE_MS;
+        }
+    }
+
     // Nothing to report before there is a player to report on, and dead men
     // read no compasses.
     if (cg.snap->ps.stats[STAT_HEALTH] <= 0) {
@@ -557,10 +640,14 @@ void CG_DrawVRHud(void)
     CG_VRHudRegister();
 
     alpha = vr_hudAlpha ? vr_hudAlpha->value : 1.0f;
+    if (alpha > 1.0f) {
+        alpha = 1.0f;
+    }
+
+    alpha *= fade;
+
     if (alpha <= 0.01f) {
         return;
-    } else if (alpha > 1.0f) {
-        alpha = 1.0f;
     }
 
     //

@@ -133,6 +133,8 @@ cvar_t *vr_hudGroupX;
 cvar_t *vr_hudGroupY;
 cvar_t *vr_hudGroupScale;
 cvar_t *vr_hudAlpha;
+cvar_t *vr_hudTime;
+cvar_t *vr_hudShow;
 cvar_t *cg_cheats;
 
 /*
@@ -237,14 +239,22 @@ void CG_RegisterCvars(void)
     // Archived, and placed as fractions of the display rather than in pixels,
     // so the cluster can be moved and sized from autoexec.cfg. There is no
     // console in a headset and this is a thing only judged while wearing one.
+    // 0 off, 1 up on the off hand's X button for vr_hudTime seconds, 2 always.
     vr_hud           = cgi.Cvar_Get("vr_hud", "1", CVAR_ARCHIVE);
+    vr_hudTime       = cgi.Cvar_Get("vr_hudTime", "3", CVAR_ARCHIVE);
+    // Written by the VR layer when the button goes down; read here. Not
+    // archived - a timestamp from the last run means nothing to this one.
+    vr_hudShow       = cgi.Cvar_Get("vr_hudShow", "0", 0);
     vr_hudGroupX     = cgi.Cvar_Get("vr_hudGroupX", "0.5", CVAR_ARCHIVE);
     // Not where it looks like it is. This places the cluster in the flat frame,
     // and the renderer then scales that frame to vr_hudScale about the middle
     // of the display and lifts it by the eye's vertical frustum asymmetry - on
-    // a Quest 3, 170 pixels of 1760. So 0.73 here is a little below the middle
-    // of what the player actually sees, and 0.62 was a little above it.
-    vr_hudGroupY     = cgi.Cvar_Get("vr_hudGroupY", "0.73", CVAR_ARCHIVE);
+    // a Quest 3, 170 pixels of 1760. Both of those pull the number back towards
+    // the middle of the view, so the range that reaches the eye at all is about
+    // 0.13 to 0.68 of it: 0.62 lands just above the middle, 0.73 just below,
+    // and 0.92 - this - well down at 0.63, which is where it wants to be for
+    // something checked without breaking aim.
+    vr_hudGroupY     = cgi.Cvar_Get("vr_hudGroupY", "0.92", CVAR_ARCHIVE);
     vr_hudGroupScale = cgi.Cvar_Get("vr_hudGroupScale", "1.0", CVAR_ARCHIVE);
     vr_hudAlpha      = cgi.Cvar_Get("vr_hudAlpha", "1.0", CVAR_ARCHIVE);
     cg_cheats = cgi.Cvar_Get("cheats", "0", CVAR_USERINFO | CVAR_SERVERINFO | CVAR_LATCH);

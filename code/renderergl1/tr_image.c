@@ -905,6 +905,39 @@ image_t* R_CreateImageOld(
     //  Here, by using glGenTextures, it will guarantee the uniqueness of the texture
     qglGenTextures(1, &image->texnum);
 
+    //
+    // Added in OPM
+    //  glGenTextures never legitimately hands back 0 - it is the reserved
+    //  "no texture" name - so a zero here means the call did not write, and
+    //  everything downstream then works on texture zero without complaining.
+    //  Upload32 uploads into it, GL_Bind binds it, and the surface samples
+    //  opaque black. That is what every string in the game looked like: a flat
+    //  black rectangle with no glyph structure at all, because the font atlas
+    //  had been uploaded into the null texture.
+    //
+    //  Asking again costs one call on a path that has just read a file off
+    //  disk, and it turns a silently broken image into either a working one or
+    //  a line in the log.
+    //
+    if (!image->texnum) {
+        qglGenTextures(1, &image->texnum);
+
+        ri.Printf(
+            image->texnum ? PRINT_DEVELOPER : PRINT_WARNING,
+            "R_CreateImage: \"%s\" got no texture name; asked again and got %d\n",
+            name,
+            (int)image->texnum
+        );
+    }
+
+    // Every font atlas, named, as it is created. Which of the two things is
+    // happening to a broken font cannot be told apart from the outside: an
+    // image that was never created, and one that was created without a texture,
+    // look identical by the time anything draws with it.
+    if (vr_traceFont && vr_traceFont->integer && !Q_stricmpn(name, "gfx/fonts/", 10)) {
+        ri.Printf(PRINT_ALL, "image create: \"%s\" slot %d texnum %d\n", name, i, (int)image->texnum);
+    }
+
 	image->numMipmaps = numMipmaps;
 	image->allowPicmip = allowPicmip;
 	image->dynamicallyUpdated = dynamicallyUpdated;

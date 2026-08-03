@@ -524,6 +524,8 @@ extern "C" {
     extern cvar_t *vr_hudGroupY;
     extern cvar_t *vr_hudGroupScale;
     extern cvar_t *vr_hudAlpha;
+    extern cvar_t *vr_hudTime;
+    extern cvar_t *vr_hudShow;
 
     //
     // cg_main.c

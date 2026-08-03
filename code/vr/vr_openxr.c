@@ -426,6 +426,10 @@ static struct {
 	qboolean        objectivesWasDown;
 	XrAction        jumpAction;
 	qboolean        jumpWasDown;
+	// Added in OPM
+	//  Brings the gathered HUD up for a few seconds. See CG_DrawVRHud.
+	XrAction        hudAction;
+	qboolean        hudWasDown;
 	XrAction        duckAction;
 	qboolean        duckWasDown;
 	XrAction        useAction;
@@ -1795,6 +1799,13 @@ static void VR_CreateActions(void)
 		return;
 	}
 
+	Q_strncpyz(actionInfo.actionName, "hud", sizeof(actionInfo.actionName));
+	Q_strncpyz(actionInfo.localizedActionName, "Show HUD", sizeof(actionInfo.localizedActionName));
+
+	if (!XR_CHECK(xrCreateAction(vr.actionSet, &actionInfo, &vr.hudAction))) {
+		return;
+	}
+
 	Q_strncpyz(actionInfo.actionName, "duck", sizeof(actionInfo.actionName));
 	Q_strncpyz(actionInfo.localizedActionName, "Duck", sizeof(actionInfo.localizedActionName));
 
@@ -1865,10 +1876,19 @@ static void VR_CreateActions(void)
 					count++;
 				}
 
-				// And the lower one for jump: X on the left, A on the right.
+				// And the lower one: the HUD on the left's X, jump on the
+				// right's A.
+				//
+				// Changed in OPM
+				//  X used to jump as well, so jump had a button on each hand.
+				//  The HUD is worth one of them: it is hidden now and comes up
+				//  for a few seconds when asked, which needs a button that can
+				//  be hit without letting go of anything, and the off hand is
+				//  not holding the weapon. Jump keeps A, on the hand that also
+				//  carries use, so nothing is lost but the duplicate.
 				Com_sprintf(path, sizeof(path), "/user/hand/%s/input/%s/click",
 					hands[hand], (hand == 0) ? "x" : "a");
-				bindings[count].action = vr.jumpAction;
+				bindings[count].action = (hand == 0) ? vr.hudAction : vr.jumpAction;
 				if (XR_SUCCEEDED(xrStringToPath(vr.instance, path, &bindings[count].binding))) {
 					count++;
 				}
@@ -2420,6 +2440,42 @@ void VR_UpdateInput(void)
 	// keyboard - so each button sends both edges rather than toggling.
 	VR_UpdateHeldButton(vr.objectivesAction, &vr.objectivesWasDown, "+scores\n", "-scores\n");
 	VR_UpdateHeldButton(vr.jumpAction, &vr.jumpWasDown, "+moveup\n", "-moveup\n");
+
+	//
+	// Added in OPM
+	//  The HUD button, which is a stamp rather than a held command.
+	//
+	//  cgame is told when it was last pressed and works out the rest - how long
+	//  the group stays up and how it fades are its business, and putting the
+	//  timer there keeps this to reporting the press. The clock is the same one
+	//  on both sides: cgi.Milliseconds is Sys_Milliseconds.
+	//
+	{
+		XrActionStateGetInfo getInfo;
+		XrActionStateBoolean state;
+		qboolean             down = qfalse;
+
+		memset(&getInfo, 0, sizeof(getInfo));
+		getInfo.type = XR_TYPE_ACTION_STATE_GET_INFO;
+		getInfo.action = vr.hudAction;
+
+		memset(&state, 0, sizeof(state));
+		state.type = XR_TYPE_ACTION_STATE_BOOLEAN;
+
+		if (XR_SUCCEEDED(xrGetActionStateBoolean(vr.session, &getInfo, &state))
+			&& state.isActive && state.currentState) {
+			down = qtrue;
+		}
+
+		// The press edge only. Holding it should not keep restarting the timer
+		// - and should not stop it either, since a button held down is a button
+		// the player has forgotten about.
+		if (down && !vr.hudWasDown) {
+			Cvar_Set2("vr_hudShow", va("%d", Sys_Milliseconds()), qtrue);
+		}
+		vr.hudWasDown = down;
+	}
+
 	VR_UpdateHeldButton(vr.duckAction, &vr.duckWasDown, "+movedown\n", "-movedown\n");
 	VR_UpdateHeldButton(vr.useAction, &vr.useWasDown, "+use\n", "-use\n");
 
