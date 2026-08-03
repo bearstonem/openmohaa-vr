@@ -804,6 +804,8 @@ void CL_InitCGameDLL( clientGameImport_t *cgi, clientGameExport_t **cge ) {
 	cgi->R_GetShaderHeight			= re.GetShaderHeight;
 
 	cgi->R_DrawBox					= re.DrawBox;
+	// Added in OPM, so the gathered VR HUD can turn the compass face.
+	cgi->R_DrawTrianglePic			= re.DrawTrianglePic;
 	cgi->R_SwipeBegin				= re.SwipeBegin;
 	cgi->R_SwipePoint				= re.SwipePoint;
 	cgi->R_SwipeEnd					= re.SwipeEnd;

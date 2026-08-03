@@ -1000,13 +1000,33 @@ qboolean VR_Init(void)
 	// them.
 	vr.vr_msaa = VR_TuningCvar("vr_samples", "0");
 	vr.vr_pointerBeam = Cvar_Get("vr_pointerBeam", "1", CVAR_ARCHIVE);
-	vr.vr_wristPanel = VR_TuningCvar("vr_wristPanel", "0");
+	// Deliberately not a VR_TuningCvar any more, and on. Those force their
+	// default at every start, which is right for a number still being argued
+	// with and wrong for a setting - it made this impossible to turn on from
+	// autoexec.cfg, which is the only way to set anything on a device with no
+	// console. The HUD lives on the wrist now; see UI_DrawVRCompass in
+	// cl_ui.cpp for the one piece that does not.
+	vr.vr_wristPanel = Cvar_Get("vr_wristPanel", "0", CVAR_ARCHIVE);
 	// Big for something worn on the arm, because the panel carries the whole
 	// 1680x1760 screen and the HUD only occupies a small part of it - a compass
 	// a hundred and fifty pixels across is a couple of degrees on a panel this
 	// close, which is legible only in the sense that you can tell it is there.
 	// Scaling the panel scales everything on it and crops nothing.
-	vr.vr_wristSize = VR_TuningCvar("vr_wristSize", "0.26");
+	//
+	// Changed in OPM
+	//  All of these are archived rather than VR_TuningCvars now. A tuning cvar
+	//  forces its default at every start, which is right for a number being
+	//  argued with in code and wrong for anything the player has to feel: it
+	//  made every one of these need a rebuild to try, on a device with no
+	//  console. They are set in misc/android/autoexec.cfg, where a push and a
+	//  force-stop is the whole loop.
+	//
+	//  The size and standoff came down at the same time. 0.26 across, held 0.16
+	//  out of the back of the hand, is a billboard floating above the arm
+	//  rather than something worn on it, and that is exactly how it read on the
+	//  device.
+	//
+	vr.vr_wristSize = Cvar_Get("vr_wristSize", "0.17", CVAR_ARCHIVE);
 	// Which part of the screen the panel shows, as fractions. The HUD is laid
 	// out for a whole screen and occupies a small share of it, so at full extent
 	// a compass is a couple of degrees across and legible only in the sense that
@@ -1021,16 +1041,16 @@ qboolean VR_Init(void)
 	// makes them large enough to read - the panel shows less, so what is left is
 	// bigger, without the quad growing in the room.
 	//
-	vr.vr_wristCropX = VR_TuningCvar("vr_wristCropX", "0");
-	vr.vr_wristCropY = VR_TuningCvar("vr_wristCropY", "0");
-	vr.vr_wristCropW = VR_TuningCvar("vr_wristCropW", "1");
-	vr.vr_wristCropH = VR_TuningCvar("vr_wristCropH", "0.34");
+	vr.vr_wristCropX = Cvar_Get("vr_wristCropX", "0", CVAR_ARCHIVE);
+	vr.vr_wristCropY = Cvar_Get("vr_wristCropY", "0", CVAR_ARCHIVE);
+	vr.vr_wristCropW = Cvar_Get("vr_wristCropW", "1", CVAR_ARCHIVE);
+	vr.vr_wristCropH = Cvar_Get("vr_wristCropH", "0.34", CVAR_ARCHIVE);
 	// Out of the back of the hand, and back along the forearm: the controller's
 	// pose sits out at the fingers, so a panel placed at it would be worn on the
 	// knuckles rather than the wrist. Stood further off now that it is large
 	// enough to otherwise swallow the player's arm.
-	vr.vr_wristDistance = VR_TuningCvar("vr_wristDistance", "0.16");
-	vr.vr_wristBack = VR_TuningCvar("vr_wristBack", "0.07");
+	vr.vr_wristDistance = Cvar_Get("vr_wristDistance", "0.05", CVAR_ARCHIVE);
+	vr.vr_wristBack = Cvar_Get("vr_wristBack", "0.10", CVAR_ARCHIVE);
 	// Dumps the left eye to main/vrshotN.tga every two seconds, so what the
 	// renderer produced can be looked at directly instead of described.
 	// Deliberately not a VR_TuningCvar. Those force their default at every
@@ -4196,15 +4216,23 @@ void VR_FinishEye(int eye)
 	VR_BindFramebuffer(swapchain->frameBuffers[swapchain->acquiredIndex]);
 	VR_GLDisable(GL_SCISSOR_TEST);
 
-	// Hands and the pointer beam go in on top of the world, but only while the
-	// wrist panel is up. A beam hanging off the hand at all times would be in
-	// the way of a game that is mostly about looking at things and shooting
-	// them; it is there to point at the panel, so it appears with the panel.
-	if (vr.wristVisible && vr.beamReady && vr.beamVertexCount
-		&& !(vr.vr_pointerBeam && !vr.vr_pointerBeam->integer)) {
-		VR_Viewport(0, 0, (GLsizei)swapchain->width, (GLsizei)swapchain->height);
-		VR_DrawBeam(eye, vr.beamVerts, vr.beamVertexCount);
-	}
+	//
+	// Changed in OPM
+	//  The pointer beam used to be drawn here whenever the wrist panel was up.
+	//  It is gone, for two reasons that both showed up as soon as the panel was
+	//  switched on.
+	//
+	//  It had nothing to point at. The wrist panel is a readout - objectives,
+	//  health, ammo - and there is nothing on it that can be clicked, so the
+	//  beam was decoration. The screen layer keeps its beam, in
+	//  VR_RenderPointerLayer, because menus do have buttons.
+	//
+	//  And it appeared during ordinary play. VR_UpdateWristPanel decides the
+	//  panel is up when the left hand is close to the head with the back of it
+	//  turned towards the face, which is a fair description of reading a watch
+	//  and also of holding a rifle with two hands. So the beam kept lighting up
+	//  under the gun.
+	//
 
 	// The compositor reads the alpha channel; the engine leaves it at whatever
 	// the scene wrote, which shows up as a translucent image.

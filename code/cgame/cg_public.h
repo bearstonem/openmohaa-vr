@@ -331,6 +331,13 @@ functions exported to the main executable
         int (*R_GetShaderWidth)(qhandle_t shader);
         int (*R_GetShaderHeight)(qhandle_t shader);
         void (*R_DrawBox)(float x, float y, float w, float h);
+        // Added in OPM
+        //  A textured triangle at arbitrary screen coordinates, which is the
+        //  only way to draw anything rotated - R_DrawStretchPic is axis
+        //  aligned. The UI has had this all along as re.DrawTrianglePic and it
+        //  is how the retail compass turns its face; cgame needed it once the
+        //  compass moved here. See CG_VRHudRotatedPic.
+        void (*R_DrawTrianglePic)(const vec2_t vPoints[3], const vec2_t vTexCoords[3], qhandle_t hShader);
 
         // =========== data shared with the client =============
         void (*GetGameState)(gameState_t *gamestate);

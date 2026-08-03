@@ -2240,7 +2240,7 @@ typedef struct {
 
 extern vrViewState_t	vrView;
 
-void R_VRAdjust2DOrtho( float *left, float *right, float *bottom, float *top );
+void R_VRAdjust2DRect( int *x, int *y, int *w, int *h );
 
 void RE_SetVRView( const float *origin, const vec3_t *axis,
 			float tanLeft, float tanRight, float tanUp, float tanDown,

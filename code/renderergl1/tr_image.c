@@ -573,7 +573,23 @@ static void Upload32(
 				}
 				else
 				{
-					internalFormat = 3;
+					//
+					// Fixed in OPM
+					//  These were the literals 3 and 4 - OpenGL 1.x shorthand
+					//  for "three components" and "four components". Legal on
+					//  the desktop and meaningless in OpenGL ES, where
+					//  internalformat has to be a real enum, so gl4es had
+					//  nothing to map and the alpha was dropped on upload.
+					//
+					//  It cost every string in the UI. A font atlas is white
+					//  glyphs in the alpha channel over a black RGB, so without
+					//  alpha each one drew as an opaque black block - measured
+					//  on the device as "internal 0x4" against a shader whose
+					//  blend and rgbGen were both correct. Images were fine
+					//  throughout, because an opaque texture loses nothing when
+					//  its alpha goes.
+					//
+					internalFormat = GL_RGB;   // was the literal 3
 				}
 			}
 			else
@@ -603,7 +619,8 @@ static void Upload32(
 				}
 				else
 				{
-					internalFormat = 4;
+					// See the note on GL_RGB above.
+					internalFormat = GL_RGBA;  // was the literal 4
 				}
 			}
 			else

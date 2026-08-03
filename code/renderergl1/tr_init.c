@@ -54,6 +54,8 @@ cvar_t	*r_vrTrace;
 cvar_t	*vr_fovZoom;
 cvar_t	*vr_hudScale;
 cvar_t	*vr_hudDepth;
+cvar_t	*vr_hudOffset;
+cvar_t	*vr_traceHud;
 
 cvar_t	*r_inGameVideo;
 cvar_t	*r_fastsky;
@@ -1433,6 +1435,7 @@ void R_Register( void )
 	//  around has only ever been seen on the device. See
 	//  docs/markdown/04-coding/05-dlights.md.
 	r_worldDlights = ri.Cvar_Get( "r_worldDlights", "1", CVAR_ARCHIVE );
+	vr_traceFont = ri.Cvar_Get( "vr_traceFont", "0", 0 );
 	r_finish = ri.Cvar_Get ("r_finish", "0", CVAR_ARCHIVE);
 	r_textureMode = ri.Cvar_Get( "r_textureMode", "gl_linear_mipmap_linear", CVAR_ARCHIVE );
 	r_swapInterval = ri.Cvar_Get( "r_swapInterval", "0", CVAR_ARCHIVE | CVAR_LATCH );
@@ -1596,10 +1599,14 @@ void R_Register( void )
 	r_vrTrace = ri.Cvar_Get( "r_vrTrace", "0", 0 );
 	// Set by cgame from the fov the game asked for; see CG_CalcFov.
 	vr_fovZoom = ri.Cvar_Get( "vr_fovZoom", "1", 0 );
-	// See R_VRAdjust2DOrtho. Scale is the share of the display the HUD is drawn
-	// across; depth is how far out it is made to converge.
+	// See R_VRAdjust2DRect. Scale is the share of the display the HUD is drawn
+	// across; depth is how far out it is made to converge. Offset is how much
+	// of the per-eye optical-axis centring to apply, and wants to be 1 - it is
+	// separable only so that the term can be taken out while looking at it.
 	vr_hudScale = ri.Cvar_Get( "vr_hudScale", "0.55", CVAR_ARCHIVE );
 	vr_hudDepth = ri.Cvar_Get( "vr_hudDepth", "2.0", CVAR_ARCHIVE );
+	vr_hudOffset = ri.Cvar_Get( "vr_hudOffset", "1", CVAR_ARCHIVE );
+	vr_traceHud = ri.Cvar_Get( "vr_traceHud", "0", 0 );
 	r_ext_texture_filter_anisotropic = ri.Cvar_Get("r_ext_texture_filter_anisotropic",
 		"0", CVAR_ARCHIVE | CVAR_LATCH);
 	r_stereoEnabled = ri.Cvar_Get("r_stereoEnabled", "0", CVAR_ARCHIVE | CVAR_LATCH);

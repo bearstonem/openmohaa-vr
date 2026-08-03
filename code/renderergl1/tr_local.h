@@ -1450,7 +1450,7 @@ void RE_SetVRView( const float *origin, const vec3_t *axis,
 			float baseYaw, int eye );
 void RE_SetDefaultFramebuffer( unsigned int framebuffer );
 void R_ApplyVRView( refdef_t *fd );
-void R_VRAdjust2DOrtho( float *left, float *right, float *bottom, float *top );
+void R_VRAdjust2DRect( int *x, int *y, int *w, int *h );
 
 extern backEndState_t	backEnd;
 extern trGlobals_t	tr;
@@ -1498,6 +1498,8 @@ extern cvar_t	*r_vrTrace;				// log the composed VR camera once a second
 extern cvar_t	*vr_fovZoom;			// scope magnification, published by cgame
 extern cvar_t	*vr_hudScale;			// how much of the display the HUD covers
 extern cvar_t	*vr_hudDepth;			// metres out the HUD is made to converge
+extern cvar_t	*vr_hudOffset;			// share of the optical-axis centring to apply
+extern cvar_t	*vr_traceHud;			// report the 2D correction once per eye
 
 extern cvar_t	*r_lodscale;
 
@@ -1523,6 +1525,10 @@ extern cvar_t	*vr_traceDlight;
 //  A workaround switch, not a feature - see the comment in R_RealDlightFace
 //  and docs/markdown/04-coding/05-dlights.md.
 extern cvar_t	*r_worldDlights;
+// Added in OPM
+//  One line per font shader loaded, naming what the UI text is actually drawn
+//  with. See R_LoadFontShader in tr_font.cpp.
+extern cvar_t	*vr_traceFont;
 void	RB_TraceDlightBind(const shader_t *shader, const char *what);
 
 extern	cvar_t	*r_norefresh;			// bypasses the ref rendering

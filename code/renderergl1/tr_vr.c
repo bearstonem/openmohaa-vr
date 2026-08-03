@@ -231,32 +231,30 @@ void R_ApplyVRView(refdef_t *fd)
 
 /*
 ================
-R_VRAdjust2DOrtho
+R_VRGet2DTransform
 
-Bends a 2D ortho window to suit the eye it is about to be drawn into.
+The one correction flat content needs in a headset, as a scale about the centre
+of the eye buffer and an offset in half-widths of it.
 
-Flat content in a headset needs three corrections that no screen ever does.
-Each eye looks through a frustum that is not centred on its own axis, so
-identical 2D lands in a different place in each eye; there is no disparity, so
-what does line up sits at infinity; and the edges of the display are outside
-what can comfortably be read.
+Three things are wrong with 2D in a headset that are not wrong on a screen. Each
+eye looks through a frustum that is not centred on its own axis, so identical 2D
+lands in a different place in each eye; identical 2D also has no disparity, so
+whatever does line up sits at infinity rather than in front of the player; and
+the edges of the display are outside what can comfortably be read.
 
-Expressed as a change to the ortho window rather than a transform on every
-vertex, because the window is one matrix and the vertices are thousands.
-
-Everything 2D in this renderer goes through Set2DWindow, including RB_SetGL2D,
-so unlike rend2 there is a single place to apply it.
+Returns false when there is nothing to correct, which is every flat frame and
+every pass that draws onto a compositor quad - the wrist panel and the screen
+layer both have the compositor place them in the room, so applying an eye's
+frustum to them would be doing the same job twice, oppositely.
 ================
 */
-void R_VRAdjust2DOrtho(float *left, float *right, float *bottom, float *top)
+static qboolean R_VRGet2DTransform(float *scale, float *offX, float *offY)
 {
-    float scale, depth;
     float tanWidth, tanHeight;
-    float offX, offY, parallax;
-    float windowWidth, windowHeight;
+    float depth, parallax;
 
     if (!vrView.active) {
-        return;
+        return qfalse;
     }
 
     tanWidth  = vrView.tanRight - vrView.tanLeft;
@@ -266,38 +264,151 @@ void R_VRAdjust2DOrtho(float *left, float *right, float *bottom, float *top)
     // a NaN in the projection - which does not look like an error, it looks like
     // the HUD simply not being there.
     if (tanWidth < 0.0001f || tanHeight < 0.0001f) {
-        return;
+        return qfalse;
     }
 
-    scale = vr_hudScale ? vr_hudScale->value : 1.0f;
-    depth = vr_hudDepth ? vr_hudDepth->value : 2.0f;
+    *scale = vr_hudScale ? vr_hudScale->value : 1.0f;
+    depth  = vr_hudDepth ? vr_hudDepth->value : 2.0f;
 
-    if (scale < 0.1f) {
-        scale = 0.1f;
-    } else if (scale > 1.0f) {
-        scale = 1.0f;
+    if (*scale < 0.1f) {
+        *scale = 0.1f;
+    } else if (*scale > 1.0f) {
+        *scale = 1.0f;
     }
     if (depth < 0.5f) {
         depth = 0.5f;
     }
 
-    windowWidth  = *right - *left;
-    windowHeight = *bottom - *top;
+    // Where the eye's optical axis falls in its own buffer, as a share of half
+    // the buffer. Zero tangent is straight ahead; the runtime's frustum is
+    // asymmetric, so that is not the middle of the image.
+    *offX = -(vrView.tanRight + vrView.tanLeft) / tanWidth;
+    *offY = -(vrView.tanUp + vrView.tanDown) / tanHeight;
 
-    offX = -(vrView.tanRight + vrView.tanLeft) / tanWidth;
-    offY = -(vrView.tanUp + vrView.tanDown) / tanHeight;
+    //
+    // Added in OPM
+    //  How much of the frustum centring to apply. 1 puts the content on the
+    //  optical axis, which is what makes the two eyes agree; 0 centres it on
+    //  the buffer instead, which is wrong but symmetric.
+    //
+    //  Kept as a knob because it is the term that decides fusion: it is equal
+    //  and opposite in the two eyes, so an error here pulls the images apart
+    //  rather than merely misplacing them. Anything other than 1 is a way of
+    //  asking whether the tangents are being reported honestly, not a setting.
+    //
+    if (vr_hudOffset) {
+        *offX *= vr_hudOffset->value;
+        *offY *= vr_hudOffset->value;
+    }
 
     // Half an interpupillary distance at the given range, as a share of the
     // eye's half width, opposite ways round for the two eyes. This is what puts
     // the HUD at that range instead of infinitely far away.
     parallax = (2.0f * 0.032f) / (depth * tanWidth);
-    offX += (vrView.eye == 0) ? parallax : -parallax;
+    *offX += (vrView.eye == 0) ? parallax : -parallax;
 
-    // A window wider than the content draws the content smaller and keeps it
-    // centred; the offsets then slide it bodily.
-    *left  = *left - windowWidth * (1.0f + offX - scale) / (2.0f * scale);
-    *right = *left + windowWidth / scale;
+    //
+    // Added in OPM
+    //  One line per eye, once. Convergence cannot be judged from a screenshot -
+    //  the Quest's capture is a reprojected composite of one eye, so the two
+    //  images that have to fuse are never both in it. These are the numbers
+    //  that decide it, and the last of them is the whole answer: the disparity
+    //  is how far apart the same pixel lands in the two eyes, and it is either
+    //  the half-IPD the depth asks for or it is not.
+    //
+    {
+        static int reported;
 
-    *top    = *top + windowHeight * (offY + scale - 1.0f) / (2.0f * scale);
-    *bottom = *top + windowHeight / scale;
+        if (vr_traceHud && vr_traceHud->integer) {
+            if (!(reported & (1 << vrView.eye))) {
+                reported |= 1 << vrView.eye;
+                ri.Printf(
+                    PRINT_ALL,
+                    "vr hud: eye %d tan L%.3f R%.3f U%.3f D%.3f | scale %.2f depth %.2f offsetCvar %.2f"
+                    " | offX %.4f offY %.4f parallax %.4f | shift %.1f,%.1f px of %dx%d\n",
+                    vrView.eye,
+                    vrView.tanLeft, vrView.tanRight, vrView.tanUp, vrView.tanDown,
+                    *scale, depth, vr_hudOffset ? vr_hudOffset->value : 1.0f,
+                    *offX, *offY, parallax,
+                    *offX * glConfig.vidWidth * 0.5f,
+                    *offY * glConfig.vidHeight * 0.5f,
+                    glConfig.vidWidth, glConfig.vidHeight
+                );
+            }
+        } else {
+            // Re-armed while it is off, so turning it on later still says
+            // something. Otherwise the one report is spent during startup.
+            reported = 0;
+        }
+    }
+
+    return qtrue;
+}
+
+/*
+================
+R_VRAdjust2DRect
+
+Moves a 2D viewport or scissor rectangle to suit the eye it is about to be drawn
+into. Coordinates are pixels in the eye buffer, GL's way up.
+
+Expressed as a change to the rectangle rather than to the ortho window, and this
+is the whole point of the function.
+
+The correction is a property of the display: the same number of pixels, in the
+same direction, for everything flat in the frame. An ortho window is not - in
+this engine it is usually a single widget. UIWidget::set2D gives every widget a
+viewport and an ortho window cut to that widget's own frame, and the HUD is
+built out of widgets: hud_compass, hud_health, hud_ammo, hud_weapons, hud_items
+are each a menu drawn that way. Correcting the window therefore scaled the
+correction to the widget, and a hundred and fifty pixel compass in a sixteen
+hundred pixel eye received about a twelfth of the shift it needed.
+
+That is what the HUD refusing to fuse actually was. Every element ended up with
+a disparity in proportion to its own width, so each one sat at a different
+apparent depth - the objectives, drawn through the full screen window the 3D
+view sets up, converged where they were asked to; the compass beside them sat
+near infinity. There is no vergence a pair of eyes can adopt that resolves both,
+so the HUD reads as doubled no matter what vr_hudDepth is set to.
+
+Applied to the rectangle it comes out in pixels, which every 2D window shares,
+so all of it converges together whatever window it was drawn through. It also
+puts vr_hudScale back in charge of where things are rather than only how big
+they are: scaling about the centre of the display draws the corners inwards,
+where before each widget merely shrank where it stood.
+================
+*/
+void R_VRAdjust2DRect(int *x, int *y, int *w, int *h)
+{
+    float scale, offX, offY;
+    float halfW, halfH;
+    float x0, y0, x1, y1;
+
+    if (!R_VRGet2DTransform(&scale, &offX, &offY)) {
+        return;
+    }
+
+    halfW = glConfig.vidWidth * 0.5f;
+    halfH = glConfig.vidHeight * 0.5f;
+
+    // Both edges are mapped and then rounded, rather than rounding the origin
+    // and scaling the size, so that neighbouring rectangles stay neighbouring.
+    x0 = halfW + (*x - halfW) * scale + offX * halfW;
+    y0 = halfH + (*y - halfH) * scale + offY * halfH;
+    x1 = x0 + *w * scale;
+    y1 = y0 + *h * scale;
+
+    *x = (int)floor(x0 + 0.5f);
+    *y = (int)floor(y0 + 0.5f);
+    *w = (int)floor(x1 + 0.5f) - *x;
+    *h = (int)floor(y1 + 0.5f) - *y;
+
+    // A zero width viewport is undefined and a zero width scissor draws
+    // nothing; a widget small enough to round away is better drawn thin.
+    if (*w < 1) {
+        *w = 1;
+    }
+    if (*h < 1) {
+        *h = 1;
+    }
 }

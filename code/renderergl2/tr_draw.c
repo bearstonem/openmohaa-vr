@@ -504,13 +504,17 @@ void Set2DWindow(int x, int y, int w, int h, float left, float right, float bott
     backEnd.projection2D = qtrue;
     backEnd.last2DFBO = glState.currentFBO;
 
-    qglViewport(x, y, w, h);
-    qglScissor(x, y, w, h);
-
     // Everything the UI draws comes through here rather than RB_SetGL2D, so
     // this is where the headset's correction has to be applied or none of it
     // reaches the HUD.
-    R_VRAdjust2DOrtho(&left, &right, &bottom, &top);
+    //
+    // Applied to the rectangle and not to the ortho window, because the window
+    // is usually a single widget's and the correction is the whole display's.
+    // See R_VRAdjust2DRect.
+    R_VRAdjust2DRect(&x, &y, &w, &h);
+
+    qglViewport(x, y, w, h);
+    qglScissor(x, y, w, h);
 
     Mat4Ortho(left, right, bottom, top, n, f, matrix);
     GL_SetProjectionMatrix(matrix);
@@ -535,6 +539,11 @@ RE_Scissor
 ================
 */
 void RE_Scissor(int x, int y, int width, int height) {
+    // The UI clips each widget to its own frame right after setting the window
+    // for it, so this has to move with the window or a widget the headset's
+    // correction has shifted is clipped away at where it used to be.
+    R_VRAdjust2DRect(&x, &y, &width, &height);
+
     qglEnable(GL_SCISSOR_TEST);
     qglScissor(x, y, width, height);
 }

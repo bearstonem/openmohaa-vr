@@ -29,6 +29,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 static fontheader_sgl_t s_loadedFonts_sgl[MAX_LOADED_FONTS];
 static int s_numLoadedFonts_sgl = 0;
 static fontheader_t s_loadedFonts[MAX_LOADED_FONTS];
+
+cvar_t *vr_traceFont;
 static int s_numLoadedFonts = 0;
 static float s_fontHeightScale = 1.0;
 static float s_fontGeneralScale = 1.0;
@@ -546,6 +548,139 @@ void R_LoadFontShader(fontheader_sgl_t* font)
     {
         font->trhandle = r_sequencenumber;
     }
+
+    //
+    // Fixed in OPM
+    //  Keep the atlas alive, and fetch it again if it has already gone.
+    //
+    //  Every string in the game drew as a solid black rectangle - not a black
+    //  box with faint glyphs, which is the missing-alpha symptom, but flat
+    //  0,0,0 with no glyph structure in it at all. Measured at the draw call,
+    //  the shader's own stage reported texnum 0: no texture. Sampling texture
+    //  zero returns opaque black, and opaque black is exactly what the screen
+    //  had.
+    //
+    //  The lifetime is the cause. R_FreeUnusedImages runs at the end of every
+    //  registration - RE_EndRegistration, so once per map load - and frees
+    //  every image whose r_sequence is neither the current one nor -1, where
+    //  freeing means memset of the whole image_t. The font atlas is loaded
+    //  once, early, by whoever draws text first; the shader that refers to it
+    //  is then found in the shader hash on every later call to this function
+    //  and handed straight back, images untouched. So the shader survives a map
+    //  load and the image it points at does not, and the pointer is left aimed
+    //  at a zeroed slot.
+    //
+    //  The trick above of forcing r_sequencenumber to -1 across R_FindShader is
+    //  meant to prevent exactly this, and it does - but only for the load that
+    //  actually creates the image. It does nothing for an atlas that some other
+    //  path brought in first at an ordinary sequence number, which is the usual
+    //  case: the menus draw text long before any of this runs.
+    //
+    //  So mark it here, every time, where the font is known to still want it.
+    //  And if it has already been taken, ask for it again by name - the name is
+    //  gone from the image_t along with everything else, but it is recoverable,
+    //  because the font's own name is what built the shader's name to begin
+    //  with.
+    //
+    for (i = 0; i < fontshader->numUnfoggedPasses; i++)
+    {
+        shaderStage_t *st = fontshader->unfoggedStages[i];
+        image_t       *img;
+
+        if (!st || !st->active) {
+            continue;
+        }
+
+        img = st->bundle[0].image[0];
+
+        if (!img || !img->texnum) {
+            char lost[MAX_QPATH];
+
+            //
+            //  Asking for it by name is not enough on its own, and that was the
+            //  first attempt. R_FindImageFileOld looks in the hash before it
+            //  looks on disk, and the entry in the hash is the very image that
+            //  has no texture - so it comes straight back, still broken, and
+            //  nothing has happened. Measured: name intact, r_sequence pinned,
+            //  texnum still zero.
+            //
+            //  So take it out of the hash first. R_FreeImage unhooks it and
+            //  clears the slot, which is what makes the next lookup miss and go
+            //  to disk, where a fresh image_t gets a texture of its own. The
+            //  name has to be copied out before that, because clearing the slot
+            //  takes the name with it.
+            //
+            if (img && img->imgName[0]) {
+                Q_strncpyz(lost, img->imgName, sizeof(lost));
+            } else {
+                Com_sprintf(lost, sizeof(lost), "gfx/fonts/%s.tga", font->name);
+            }
+
+            if (img) {
+                R_FreeImage(img);
+            }
+
+            img = R_FindImageFileOld(lost, qfalse, qfalse, qfalse, GL_REPEAT, GL_REPEAT);
+
+            if (img) {
+                st->bundle[0].image[0] = img;
+                ri.Printf(PRINT_ALL, "R_LoadFontShader: reloaded the atlas '%s' for '%s', texnum %d\n",
+                    lost, font->name, (int)img->texnum);
+            } else {
+                ri.Printf(PRINT_WARNING, "R_LoadFontShader: lost the atlas '%s' for '%s' and could not fetch it back\n",
+                    lost, font->name);
+            }
+        }
+
+        if (img) {
+            // Never a candidate for R_FreeUnusedImages again. A font outlives
+            // any one map, so its atlas has to as well.
+            img->r_sequence = -1;
+        }
+    }
+
+    //
+    // Added in OPM, for the port.
+    //
+    //  Every string in the UI draws as an opaque black box with the glyphs
+    //  faintly visible in it, while every image beside it is correct. Both go
+    //  through RB_BeginSurface/RB_EndSurface on the same immediate path, so the
+    //  difference has to be the shader, and there are exactly two ways it can
+    //  come out opaque:
+    //
+    //    - the lookup missed the script and fell back to a default shader,
+    //      which is GLS_DEFAULT and therefore opaque. "default 1" says so;
+    //    - the script was found but the atlas lost its alpha on upload, so
+    //      GL_SRC_ALPHA blends against 1 everywhere and covers the background.
+    //      "internal 0x1907" is GL_RGB and means exactly that; 0x1908 is
+    //      GL_RGBA and means the alpha survived.
+    //
+    //  gfx/fonts/facfont-20.tga is greyscale in RGB - 0 where alpha is 0, about
+    //  144 on a glyph - so drawn without a working alpha it is a black box with
+    //  grey letters, which is what the device shows.
+    //
+    //  The stage's blend bits are printed raw. 0x65 is
+    //  GLS_SRCBLEND_SRC_ALPHA | GLS_DSTBLEND_ONE_MINUS_SRC_ALPHA, what the
+    //  script asks for. 0 is GLS_DEFAULT, which is opaque.
+    //
+    if (vr_traceFont && vr_traceFont->integer) {
+        const shaderStage_t *st = fontshader->numUnfoggedPasses ? fontshader->unfoggedStages[0] : NULL;
+
+        ri.Printf(
+            PRINT_ALL,
+            "font: \"%s\" default %d passes %d | blend 0x%x rgbGen %d alphaGen %d | image \"%s\" internal 0x%x"
+            " texnum %d\n",
+            fontshader->name,
+            (int)fontshader->defaultShader,
+            fontshader->numUnfoggedPasses,
+            st ? (unsigned int)(st->stateBits & (GLS_SRCBLEND_BITS | GLS_DSTBLEND_BITS)) : 0u,
+            st ? (int)st->rgbGen : -1,
+            st ? (int)st->alphaGen : -1,
+            (st && st->bundle[0].image[0]) ? st->bundle[0].image[0]->imgName : "none",
+            (st && st->bundle[0].image[0]) ? (unsigned int)st->bundle[0].image[0]->internalFormat : 0u,
+            (st && st->bundle[0].image[0]) ? (int)st->bundle[0].image[0]->texnum : -1
+        );
+    }
 }
 
 void R_DrawString_sgl(fontheader_sgl_t* font, const char* text, float x, float y, int maxlen, const float *pvVirtualScreen) {
@@ -583,6 +718,63 @@ void R_DrawString_sgl(fontheader_sgl_t* font, const char* text, float x, float y
 
     if (!font->shader) {
         R_LoadFontShader(font);
+    }
+
+    //
+    // Added in OPM
+    //  What the GL is actually set to at the moment a string is about to be
+    //  drawn, once a second while vr_traceFont is on.
+    //
+    //  Every string in the eye buffers comes out as a solid black rectangle -
+    //  measured off a real eye dump, not a compositor screenshot, so it is not
+    //  a compression artefact: the box is 0,0,0 with no glyph structure in it
+    //  at all. Opaque and black together rules out most of the candidates. The
+    //  atlas is a 32 bit TGA with a real alpha channel, min 0 max 255, and the
+    //  loader supports that; the shader is rgbGen global_color, alphaGen
+    //  global_alpha over SRC_ALPHA/ONE_MINUS_SRC_ALPHA, which is right; and
+    //  color2D cannot be black, because the bars drawn either side of the text
+    //  through the same field come out green and amber.
+    //
+    //  What is left is the texture not reaching the fragments, and that is a
+    //  GL state question that no amount of reading the engine will answer -
+    //  the state the engine believes it set and the state gl4es actually has
+    //  are exactly the two things that come apart here. So this asks the
+    //  driver instead of the renderer: what is bound, what is enabled, and
+    //  what the blend is really doing.
+    //
+    if (vr_traceFont && vr_traceFont->integer) {
+        static int lastReport;
+        int        now = ri.Milliseconds();
+
+        if (now - lastReport > 1000) {
+            const shader_t      *sh = (const shader_t *)font->shader;
+            const shaderStage_t *st = (sh && sh->numUnfoggedPasses) ? sh->unfoggedStages[0] : NULL;
+            GLint                boundTex = 0, srcBlend = 0, dstBlend = 0;
+            GLboolean            blendOn = 0, texOn = 0;
+
+            lastReport = now;
+
+            qglGetIntegerv(GL_TEXTURE_BINDING_2D, &boundTex);
+            qglGetIntegerv(GL_BLEND_SRC, &srcBlend);
+            qglGetIntegerv(GL_BLEND_DST, &dstBlend);
+            blendOn = glIsEnabled(GL_BLEND);
+            texOn   = glIsEnabled(GL_TEXTURE_2D);
+
+            ri.Printf(
+                PRINT_ALL,
+                "font draw: \"%s\" color2D %d %d %d %d | blend %d src 0x%x dst 0x%x | tex2d %d bound %d"
+                " want %d | img \"%s\" seq %d of %d | scale %.2f\n",
+                sh ? sh->name : "none",
+                backEnd.color2D[0], backEnd.color2D[1], backEnd.color2D[2], backEnd.color2D[3],
+                (int)blendOn, (unsigned int)srcBlend, (unsigned int)dstBlend,
+                (int)texOn, (int)boundTex,
+                (st && st->bundle[0].image[0]) ? st->bundle[0].image[0]->texnum : -1,
+                (st && st->bundle[0].image[0]) ? st->bundle[0].image[0]->imgName : "none",
+                (st && st->bundle[0].image[0]) ? st->bundle[0].image[0]->r_sequence : -999,
+                r_sequencenumber,
+                s_fontGeneralScale
+            );
+        }
     }
 
     charHeight = s_fontHeightScale * font->height * s_fontGeneralScale;

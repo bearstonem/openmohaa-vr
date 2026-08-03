@@ -117,6 +117,22 @@ cvar_t *ui_timemessage;
 //
 cvar_t *cg_fov;
 cvar_t *vr_hudPass;
+// Added in OPM
+//  Whether the reticle is drawn in VR. Off: it sits at the centre of the head
+//  while the weapon is aimed by the controller, so it marks a spot the gun is
+//  not pointing at. See CG_Draw2D.
+cvar_t *vr_crosshair;
+cvar_t *vr_traceObjectives;
+cvar_t *vr_objectivesAlways;
+// Added in OPM
+//  The gathered VR HUD - compass, objectives, health, ammo and the weapon
+//  strip drawn as one group in the middle of the view instead of as five
+//  widgets in five corners of a lens. See cg_vrhud.cpp.
+cvar_t *vr_hud;
+cvar_t *vr_hudGroupX;
+cvar_t *vr_hudGroupY;
+cvar_t *vr_hudGroupScale;
+cvar_t *vr_hudAlpha;
 cvar_t *cg_cheats;
 
 /*
@@ -215,6 +231,22 @@ void CG_RegisterCvars(void)
     cg_fov = cgi.Cvar_Get("cg_fov", "80", CVAR_ARCHIVE);
     // Set by the client around each half of a split VR frame; 0 on flat frames.
     vr_hudPass = cgi.Cvar_Get("vr_hudPass", "0", 0);
+    vr_crosshair = cgi.Cvar_Get("vr_crosshair", "0", CVAR_ARCHIVE);
+    vr_traceObjectives = cgi.Cvar_Get("vr_traceObjectives", "0", 0);
+    vr_objectivesAlways = cgi.Cvar_Get("vr_objectivesAlways", "1", CVAR_ARCHIVE);
+    // Archived, and placed as fractions of the display rather than in pixels,
+    // so the cluster can be moved and sized from autoexec.cfg. There is no
+    // console in a headset and this is a thing only judged while wearing one.
+    vr_hud           = cgi.Cvar_Get("vr_hud", "1", CVAR_ARCHIVE);
+    vr_hudGroupX     = cgi.Cvar_Get("vr_hudGroupX", "0.5", CVAR_ARCHIVE);
+    // Not where it looks like it is. This places the cluster in the flat frame,
+    // and the renderer then scales that frame to vr_hudScale about the middle
+    // of the display and lifts it by the eye's vertical frustum asymmetry - on
+    // a Quest 3, 170 pixels of 1760. So 0.73 here is a little below the middle
+    // of what the player actually sees, and 0.62 was a little above it.
+    vr_hudGroupY     = cgi.Cvar_Get("vr_hudGroupY", "0.73", CVAR_ARCHIVE);
+    vr_hudGroupScale = cgi.Cvar_Get("vr_hudGroupScale", "1.0", CVAR_ARCHIVE);
+    vr_hudAlpha      = cgi.Cvar_Get("vr_hudAlpha", "1.0", CVAR_ARCHIVE);
     cg_cheats = cgi.Cvar_Get("cheats", "0", CVAR_USERINFO | CVAR_SERVERINFO | CVAR_LATCH);
 }
 /*

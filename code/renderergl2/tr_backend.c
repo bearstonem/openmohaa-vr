@@ -671,30 +671,36 @@ RB_SetGL2D
 */
 /*
 ================
-R_VRAdjust2DOrtho
+R_VRAdjust2DRect
 
-Bends a 2D ortho window to suit the eye it is about to be drawn into.
+Moves a 2D viewport or scissor rectangle to suit the eye it is about to be drawn
+into. Coordinates are pixels in the eye buffer, GL's way up.
 
-Flat content in a headset needs three corrections that no screen ever does.
-Each eye looks through a frustum that is not centred on its own axis, so
-identical 2D lands in a different place in each eye; there is no disparity, so
-what does line up sits at infinity; and the edges of the display are outside
+Flat content in a headset needs three corrections that no screen ever does. Each
+eye looks through a frustum that is not centred on its own axis, so identical 2D
+lands in a different place in each eye; identical 2D also has no disparity, so
+whatever does line up sits at infinity; and the edges of the display are outside
 what can comfortably be read.
 
-Expressed as a change to the ortho window rather than a transform on every
-vertex, because the window is one matrix and the vertices are thousands.
+Expressed as a change to the rectangle rather than to the ortho window, because
+the correction belongs to the display and the window usually does not. See the
+long note on the same function in renderergl1/tr_vr.c: UIWidget::set2D gives
+every widget an ortho window cut to its own frame, so correcting the window
+scaled the correction to the widget and left each HUD element converging at a
+different depth.
 
 Lives here, and is called from both places that set up a 2D projection, because
 Set2DWindow builds its own matrix rather than going through RB_SetGL2D - so
 correcting only one of them corrects nothing that the UI actually draws.
 ================
 */
-void R_VRAdjust2DOrtho( float *left, float *right, float *bottom, float *top )
+void R_VRAdjust2DRect( int *x, int *y, int *w, int *h )
 {
 	float scale, depth;
 	float tanWidth, tanHeight;
 	float offX, offY, parallax;
-	float windowWidth, windowHeight;
+	float halfW, halfH;
+	float x0, y0, x1, y1;
 
 	if ( !vrView.active ) {
 		return;
@@ -722,9 +728,9 @@ void R_VRAdjust2DOrtho( float *left, float *right, float *bottom, float *top )
 		depth = 0.5f;
 	}
 
-	windowWidth = *right - *left;
-	windowHeight = *bottom - *top;
-
+	// Where the eye's optical axis falls in its own buffer, as a share of half
+	// the buffer. Zero tangent is straight ahead; the runtime's frustum is
+	// asymmetric, so that is not the middle of the image.
 	offX = -( vrView.tanRight + vrView.tanLeft ) / tanWidth;
 	offY = -( vrView.tanUp + vrView.tanDown ) / tanHeight;
 
@@ -734,13 +740,29 @@ void R_VRAdjust2DOrtho( float *left, float *right, float *bottom, float *top )
 	parallax = ( 2.0f * 0.032f ) / ( depth * tanWidth );
 	offX += ( vrView.eye == 0 ) ? parallax : -parallax;
 
-	// A window wider than the content draws the content smaller and keeps it
-	// centred; the offsets then slide it bodily.
-	*left = *left - windowWidth * ( 1.0f + offX - scale ) / ( 2.0f * scale );
-	*right = *left + windowWidth / scale;
+	halfW = glConfig.vidWidth * 0.5f;
+	halfH = glConfig.vidHeight * 0.5f;
 
-	*top = *top + windowHeight * ( offY + scale - 1.0f ) / ( 2.0f * scale );
-	*bottom = *top + windowHeight / scale;
+	// Both edges are mapped and then rounded, rather than rounding the origin
+	// and scaling the size, so that neighbouring rectangles stay neighbouring.
+	x0 = halfW + ( *x - halfW ) * scale + offX * halfW;
+	y0 = halfH + ( *y - halfH ) * scale + offY * halfH;
+	x1 = x0 + *w * scale;
+	y1 = y0 + *h * scale;
+
+	*x = (int)floor( x0 + 0.5f );
+	*y = (int)floor( y0 + 0.5f );
+	*w = (int)floor( x1 + 0.5f ) - *x;
+	*h = (int)floor( y1 + 0.5f ) - *y;
+
+	// A zero width viewport is undefined and a zero width scissor draws
+	// nothing; a widget small enough to round away is better drawn thin.
+	if ( *w < 1 ) {
+		*w = 1;
+	}
+	if ( *h < 1 ) {
+		*h = 1;
+	}
 }
 
 void	RB_SetGL2D (void) {
@@ -771,14 +793,18 @@ void	RB_SetGL2D (void) {
 	}
 
 	// set 2D virtual screen size
-	qglViewport( 0, 0, width, height );
-	qglScissor( 0, 0, width, height );
+	{
+		int vx = 0, vy = 0, vw = width, vh = height;
+
+		R_VRAdjust2DRect( &vx, &vy, &vw, &vh );
+		qglViewport( vx, vy, vw, vh );
+		qglScissor( vx, vy, vw, vh );
+	}
 
 	left = 0;
 	right = width;
 	bottom = height;
 	top = 0;
-	R_VRAdjust2DOrtho( &left, &right, &bottom, &top );
 
 	Mat4Ortho(left, right, bottom, top, 0, 1, matrix);
 	GL_SetProjectionMatrix(matrix);

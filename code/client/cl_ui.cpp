@@ -123,6 +123,12 @@ cvar_t        *ui_gmboxspam;
 cvar_t        *ui_debugload;
 cvar_t        *sound_overlay;
 cvar_t        *ui_compass_scale;
+// Added in OPM
+//  Where the compass sits, as fractions of the flat screen. hud_compass.urc
+//  aligns it left top, which in a headset is the far corner of the lens - it is
+//  there, and it is barely visible. See UI_PlaceVRCompass.
+cvar_t        *vr_compassX;
+cvar_t        *vr_compassY;
 
 static intro_stage_t intro_stage;
 static char          server_mapname[64];
@@ -1821,6 +1827,64 @@ UI_Update
 Updates the UI.
 ====================
 */
+/*
+====================
+UI_PlaceVRCompass
+
+Added in OPM.
+
+hud_compass.urc aligns the compass left top, so it is drawn at 0,0. On a flat
+screen that is a corner you can glance at; in a headset it is the far edge of
+the lens, where it is technically visible and practically not.
+
+Centred horizontally and set a little below the middle, which is where a thing
+you check without breaking your aim wants to be. Fractions of the screen rather
+than pixels so it means the same at any eye resolution, and the widget's own
+size is taken off so the fraction places its centre rather than its corner.
+
+Applied only when the numbers change. setFrame propagates the coordinate system
+and fires signals, which is not something to do every frame for a widget that is
+not moving - and the alignment flags are cleared at the same time, so nothing
+puts it back.
+====================
+*/
+static void UI_PlaceVRCompass(void)
+{
+    static float appliedX = -1.0f;
+    static float appliedY = -1.0f;
+    UIWidget    *widget;
+    UIRect2D     frame;
+
+    if (!hud_compass || !vr_compassX || !vr_compassY) {
+        return;
+    }
+
+    if (vr_compassX->value == appliedX && vr_compassY->value == appliedY) {
+        return;
+    }
+
+    widget = hud_compass->GetContainerWidget();
+
+    //
+    //  The alignment flags have to go first, or none of this survives.
+    //  hud_compass.urc says "align left top", and UIWidget::AlignPosition
+    //  turns that into a flat "pos.x = 0; pos.y = 0" every time it runs -
+    //  which it does on Realign and ResetMotion, after this. Setting the frame
+    //  without clearing the flags puts the compass back in the corner a moment
+    //  later, which is exactly what it did.
+    //
+    widget->setAlign(0);
+
+    frame = widget->getFrame();
+
+    frame.pos.x = uid.vidWidth * vr_compassX->value - frame.size.width * 0.5f;
+    frame.pos.y = uid.vidHeight * vr_compassY->value - frame.size.height * 0.5f;
+    widget->setFrame(frame);
+
+    appliedX = vr_compassX->value;
+    appliedY = vr_compassY->value;
+}
+
 void UI_Update(void)
 {
     Menu    *currentMenu;
@@ -1847,7 +1911,22 @@ void UI_Update(void)
             return;
         }
 
-        if (ui_hud && !view3d->LetterboxActive()) {
+        //
+        // Added in OPM
+        //  The retail corner HUD, off while the gathered one is up.
+        //
+        //  These five menus are aligned to the four corners of a 4:3 screen -
+        //  hud_health.urc says "align left bottom", hud_compass.urc "align left
+        //  top". On a monitor that is a glance away; through a lens it is the
+        //  far edge, where they were reported as visible and unreadable. They
+        //  are drawn again, together and in the middle, by CG_DrawVRHud, and
+        //  leaving these up as well would draw everything twice.
+        //
+        //  Read straight from the cvar rather than cached, because it is
+        //  archived and can be changed at any time from autoexec.cfg - and
+        //  this has to be able to go back to the retail HUD without a rebuild.
+        //
+        if (ui_hud && !view3d->LetterboxActive() && !Cvar_Get("vr_hud", "1", CVAR_ARCHIVE)->integer) {
             // draw the health hud
             if (hud_health) {
                 hud_health->ForceShow();
@@ -1981,8 +2060,23 @@ void UI_Update(void)
     }
 
     // Hide the HUD when necessary
+    //
+    // Added in OPM
+    //  ...including whenever the gathered VR HUD is up, which is the condition
+    //  that actually turns the retail corner HUD off.
+    //
+    //  Gating the explicit Display calls in the cls.no_menus branch above was
+    //  not enough and looked like it was: the widgets kept drawing, measured
+    //  off an eye dump with hud_health's meter still at the bottom left corner
+    //  and hud_ammo's clip still at the bottom right, both exactly where their
+    //  .urc alignment puts them. That branch returns early and is not the path
+    //  taken here - when it is not, UI_Update falls through to
+    //  uWinMan.UpdateViews(), which walks the whole widget tree and draws every
+    //  shown menu whether anything asked it to or not. Hiding them is the only
+    //  thing that covers both routes.
     if (!ui_hud || clc.state != CA_ACTIVE || view3d->LetterboxActive() || (currentMenu && currentMenu->isFullscreen())
-        || server_loading || ((cl.snap.ps.pm_flags & PMF_NO_HUD) || (cl.snap.ps.pm_flags & PMF_INTERMISSION))) {
+        || server_loading || ((cl.snap.ps.pm_flags & PMF_NO_HUD) || (cl.snap.ps.pm_flags & PMF_INTERMISSION))
+        || Cvar_Get("vr_hud", "1", CVAR_ARCHIVE)->integer) {
         if (crosshairhud) {
             crosshairhud->ForceHide();
         }
@@ -2423,6 +2517,7 @@ void UI_Update(void)
     VR_TraceState((int)cl_vrDrawMode, Cvar_Get("vr_hudPass", "0", 0)->integer, cls.no_menus);
 #endif
 
+    UI_PlaceVRCompass();
     uWinMan.UpdateViews();
 }
 
@@ -3916,6 +4011,9 @@ void UI_ResolutionChange(void)
         // Older version doesn't have an adjustable compass, so assume 0.5 by default
         ui_compass_scale = Cvar_Get("ui_compass_scale", "0.55", CVAR_ARCHIVE | CVAR_LATCH);
     }
+
+    vr_compassX = Cvar_Get("vr_compassX", "0.5", CVAR_ARCHIVE);
+    vr_compassY = Cvar_Get("vr_compassY", "0.62", CVAR_ARCHIVE);
 
     CL_FillUIImports();
     CL_FillUIDef();

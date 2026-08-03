@@ -703,6 +703,7 @@ void CG_DrawObjectives()
     float        fTimeDelta;
     const char  *pszLocalizedText;
     const char  *pszLine;
+    float        fAlpha;
 
     iTotalNumLines = 0;
     for (i = CS_OBJECTIVES; i < CS_OBJECTIVES + MAX_OBJECTIVES; ++i) {
@@ -718,7 +719,71 @@ void CG_DrawObjectives()
             + cg.ObjectivesDesiredAlpha;
     }
 
-    if (cg.ObjectivesCurrentAlpha < 0.02) {
+    //
+    // Added in OPM
+    //  Full on the wrist panel, whatever the fade says. In the flat game the
+    //  objectives are a hold-the-key overlay - CG_ScoresDown_f fades them in
+    //  while the key is held - and a transient overlay on a panel that is
+    //  itself only visible while the player is looking at their wrist would
+    //  almost never be seen at all. Turning your wrist up *is* the gesture
+    //  that asks for them, so the fade has nothing left to do there.
+    //
+    //  Held in a local rather than written back to cg.ObjectivesCurrentAlpha:
+    //  CG_DrawStopwatch reads that field to decide the stopwatch is covered
+    //  and removes it, and CG_SetDesiredObjectiveAlpha animates from it.
+    //
+    fAlpha = cg.ObjectivesCurrentAlpha;
+
+    //
+    // Added in OPM
+    //  Always up in VR, whatever the fade says. In the flat game the objectives
+    //  are a hold-the-key overlay - CG_ScoresDown_f fades them in while the key
+    //  is held - and there is no key to hold in a headset.
+    //
+    //  Its own switch rather than a test on the draw pass. It was written as
+    //  pass == 1 while the HUD lived on the wrist panel; when the HUD moved
+    //  back into the eye buffers the pass became 0 and the objectives went
+    //  straight back to invisible, which took a device run to notice.
+    //
+    if (vr_objectivesAlways && vr_objectivesAlways->integer) {
+        fAlpha = 1.0f;
+    }
+
+    //
+    // Added in OPM
+    //  The objectives were reported missing from the wrist panel and there are
+    //  three quite different reasons they could be, so this says which. The
+    //  pass names where it is drawing; alpha under 0.02 is the fade still
+    //  holding them off; and a set count of zero means the level never sent any
+    //  - which a map entered straight through vr_startMap, past the scripting
+    //  that hands them out, is a very good way to arrange.
+    //
+    if (vr_traceObjectives && vr_traceObjectives->integer) {
+        static int lastReport;
+
+        if (!lastReport || cg.time - lastReport > 2000) {
+            int iSet = 0;
+            int k;
+
+            for (k = 0; k < MAX_OBJECTIVES; k++) {
+                if (cg.Objectives[k].flags != OBJ_FLAG_NONE && !(cg.Objectives[k].flags & OBJ_FLAG_HIDDEN)) {
+                    iSet++;
+                }
+            }
+
+            lastReport = cg.time;
+            cgi.Printf(
+                "objectives: pass %d alpha %.2f (raw %.2f) set %d current %d\n",
+                vr_hudPass ? vr_hudPass->integer : -1,
+                fAlpha,
+                cg.ObjectivesCurrentAlpha,
+                iSet,
+                iCurrentObjective
+            );
+        }
+    }
+
+    if (fAlpha < 0.02) {
         return;
     }
 
@@ -749,7 +814,7 @@ void CG_DrawObjectives()
     vColor[2] = 0.2f;
     vColor[1] = 0.2f;
     vColor[0] = 0.2f;
-    vColor[3] = cg.ObjectivesCurrentAlpha * 0.75;
+    vColor[3] = fAlpha * 0.75;
     cgi.R_SetColor(vColor);
     cgi.R_DrawStretchPic(
         fX,
@@ -768,7 +833,7 @@ void CG_DrawObjectives()
     vColor[0] = 1.0;
     vColor[1] = 1.0;
     vColor[2] = 1.0;
-    vColor[3] = cg.ObjectivesCurrentAlpha;
+    vColor[3] = fAlpha;
     cgi.R_SetColor(vColor);
     cgi.R_DrawString(
         cgs.media.objectiveFont,
@@ -801,26 +866,26 @@ void CG_DrawObjectives()
             vColor[0]  = 1.0;
             vColor[1]  = 1.0;
             vColor[2]  = 1.0;
-            vColor[3]  = cg.ObjectivesCurrentAlpha;
+            vColor[3]  = fAlpha;
             hBoxShader = cgs.media.uncheckedBoxShader;
         } else if ((cg.Objectives[i].flags & OBJ_FLAG_COMPLETED) != 0) {
             vColor[0]  = 0.75;
             vColor[1]  = 0.75;
             vColor[2]  = 0.75;
-            vColor[3]  = cg.ObjectivesCurrentAlpha;
+            vColor[3]  = fAlpha;
             hBoxShader = cgs.media.checkedBoxShader;
         } else {
             vColor[0]  = 1.0;
             vColor[1]  = 1.0;
             vColor[2]  = 1.0;
-            vColor[3]  = cg.ObjectivesCurrentAlpha;
+            vColor[3]  = fAlpha;
             hBoxShader = cgs.media.uncheckedBoxShader;
         }
         if (i == iCurrentObjective && !(cg.Objectives[i].flags & OBJ_FLAG_COMPLETED)) {
             vColor[0] = 1.0;
             vColor[1] = 1.0;
             vColor[2] = 0.0;
-            vColor[3] = cg.ObjectivesCurrentAlpha;
+            vColor[3] = fAlpha;
         }
 
         cgi.R_SetColor(vColor);
@@ -840,7 +905,7 @@ void CG_DrawObjectives()
         vColor[0] = 1.0;
         vColor[1] = 1.0;
         vColor[2] = 1.0;
-        vColor[3] = cg.ObjectivesCurrentAlpha;
+        vColor[3] = fAlpha;
         cgi.R_SetColor(vColor);
         cgi.R_DrawStretchPic(
             fX * cgs.uiHiResScale[0],
@@ -1601,7 +1666,20 @@ void CG_Draw2D(void)
         CG_UpdateCountdown();
         CG_DrawLagometer();
         CG_HudDrawElements();
-        CG_DrawObjectives();
+
+        //
+        // Added in OPM
+        //  The gathered VR HUD carries the objectives itself, laid out beside
+        //  the compass rather than across the top left of a screen nobody in a
+        //  headset is looking at. Drawing both would put the same text on the
+        //  view twice, in two places, at two sizes.
+        //
+        if (vr_hud && vr_hud->integer) {
+            CG_DrawVRHud();
+        } else {
+            CG_DrawObjectives();
+        }
+
         CG_DrawIcons();
         CG_DrawStopwatch();
         CG_DrawSpectatorView();
@@ -1615,10 +1693,23 @@ void CG_Draw2D(void)
     if (pass != 1) {
         CG_DrawVRWheel();
 
-        // The reticle is aimed at things out in the world and the scope
-        // surround has to sit around the magnified view, so both stay with the
-        // world rather than travelling to the wrist.
+        // The scope surround has to sit around the magnified view, so it stays
+        // with the world rather than travelling to the wrist.
         CG_DrawZoomOverlay();
-        CG_DrawCrosshair();
+
+        //
+        // Added in OPM
+        //  The reticle is drawn at the centre of the screen, which in a headset
+        //  is the centre of the player's head - and the weapon is aimed by the
+        //  controller, not by where they are looking. So it marks a spot the
+        //  gun is not pointing at, pinned to their face wherever they turn.
+        //
+        //  pass 0 is the flat frame, where the reticle means what it always
+        //  meant and is drawn as before. vr_crosshair brings it back in VR for
+        //  anyone who wants it.
+        //
+        if (!pass || (vr_crosshair && vr_crosshair->integer)) {
+            CG_DrawCrosshair();
+        }
     }
 }

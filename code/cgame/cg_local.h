@@ -515,6 +515,15 @@ extern "C" {
     extern cvar_t *cg_cheats;
     // Which half of a split VR frame is being drawn; see CG_Draw2D.
     extern cvar_t *vr_hudPass;
+    extern cvar_t *vr_crosshair;
+    extern cvar_t *vr_traceObjectives;
+    extern cvar_t *vr_objectivesAlways;
+    // The gathered VR HUD; see cg_vrhud.cpp.
+    extern cvar_t *vr_hud;
+    extern cvar_t *vr_hudGroupX;
+    extern cvar_t *vr_hudGroupY;
+    extern cvar_t *vr_hudGroupScale;
+    extern cvar_t *vr_hudAlpha;
 
     //
     // cg_main.c
@@ -601,6 +610,11 @@ extern "C" {
 
     void CG_ZoomDown_f(void);
     void CG_ZoomUp_f(void);
+
+    //
+    // cg_vrhud.cpp
+    //
+    void CG_DrawVRHud(void);
 
     void  CG_EyePosition(vec3_t *o_vPos);
     void  CG_EyeOffset(vec3_t *o_vOfs);
