@@ -25,6 +25,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 class View3D : public UIWidget
 {
     float             m_printfadetime;
+    int               m_printUpdateTime;
+    int               m_subtitleUpdateTime;
     float             m_printalpha;
     str               m_printstring;
     UIReggedMaterial *m_print_mat;
@@ -47,6 +49,7 @@ protected:
     void DrawSoundOverlay(void);
     void CenterPrint(void);
     void LocationPrint(void);
+    void UpdatePrintTime(void);
     void OnActivate(Event *ev);
     void OnDeactivate(Event *ev);
     void DrawSubtitleOverlay(void);

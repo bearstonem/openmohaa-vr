@@ -75,13 +75,15 @@ void VR_DestroySession(void);
 // The per-eye render target size the runtime asks for.
 void VR_GetRenderResolution(int *width, int *height);
 
-// Begins a frame and updates the tracked poses. Returns false when the session
-// is not running, meaning nothing should be rendered or submitted this frame.
+// Begins a frame and updates the tracked poses. False means skip rendering
+// (inactive session, hidden frame, or unavailable tracking). Still call
+// VR_SubmitFrame to end any begun frame with no layers.
 qboolean VR_BeginFrame(void);
 
 // Bracket each eye's rendering. Between them the engine draws its scene into
 // the framebuffer VR_PrepareEye bound.
-void VR_PrepareEye(int eye);
+// False if the swapchain image is not ready; skip drawing and finishing it.
+qboolean VR_PrepareEye(int eye);
 void VR_FinishEye(int eye);
 
 // True when the frame is flat content - menus, the loading screen, a cinematic

@@ -129,6 +129,7 @@ cvar_t        *ui_compass_scale;
 //  there, and it is barely visible. See UI_PlaceVRCompass.
 cvar_t        *vr_compassX;
 cvar_t        *vr_compassY;
+static cvar_t *ui_vrHud;
 
 static intro_stage_t intro_stage;
 static char          server_mapname[64];
@@ -1850,16 +1851,18 @@ puts it back.
 */
 static void UI_PlaceVRCompass(void)
 {
-    static float appliedX = -1.0f;
-    static float appliedY = -1.0f;
     UIWidget    *widget;
     UIRect2D     frame;
 
-    if (!hud_compass || !vr_compassX || !vr_compassY) {
+#ifdef USE_OPENXR
+    if (!VR_Enabled()) {
         return;
     }
+#else
+    return;
+#endif
 
-    if (vr_compassX->value == appliedX && vr_compassY->value == appliedY) {
+    if (!hud_compass || !vr_compassX || !vr_compassY) {
         return;
     }
 
@@ -1877,18 +1880,26 @@ static void UI_PlaceVRCompass(void)
 
     frame = widget->getFrame();
 
-    frame.pos.x = uid.vidWidth * vr_compassX->value - frame.size.width * 0.5f;
-    frame.pos.y = uid.vidHeight * vr_compassY->value - frame.size.height * 0.5f;
-    widget->setFrame(frame);
-
-    appliedX = vr_compassX->value;
-    appliedY = vr_compassY->value;
+    // Compare the actual frame so a resize or recreated menu is repositioned
+    // even when the cvars have not changed. Avoid relayout for an unchanged frame.
+    const float x = uid.vidWidth * vr_compassX->value - frame.size.width * 0.5f;
+    const float y = uid.vidHeight * vr_compassY->value - frame.size.height * 0.5f;
+    if (frame.pos.x != x || frame.pos.y != y) {
+        frame.pos.x = x;
+        frame.pos.y = y;
+        widget->setFrame(frame);
+    }
 }
 
 void UI_Update(void)
 {
     Menu    *currentMenu;
     UIRect2D frame;
+    qboolean vrHudActive = qfalse;
+
+#ifdef USE_OPENXR
+    vrHudActive = VR_Enabled() && ui_vrHud && ui_vrHud->integer;
+#endif
 
     re.SetRenderTime(cls.realtime);
     CL_FillUIDef();
@@ -1922,11 +1933,10 @@ void UI_Update(void)
         //  are drawn again, together and in the middle, by CG_DrawVRHud, and
         //  leaving these up as well would draw everything twice.
         //
-        //  Read straight from the cvar rather than cached, because it is
-        //  archived and can be changed at any time from autoexec.cfg - and
-        //  this has to be able to go back to the retail HUD without a rebuild.
+        //  Read the current cvar value so the retail HUD can be restored
+        //  without a rebuild. Desktop frames always keep their own HUD.
         //
-        if (ui_hud && !view3d->LetterboxActive() && !Cvar_Get("vr_hud", "1", CVAR_ARCHIVE)->integer) {
+        if (ui_hud && !view3d->LetterboxActive() && !vrHudActive) {
             // draw the health hud
             if (hud_health) {
                 hud_health->ForceShow();
@@ -2076,7 +2086,7 @@ void UI_Update(void)
     //  thing that covers both routes.
     if (!ui_hud || clc.state != CA_ACTIVE || view3d->LetterboxActive() || (currentMenu && currentMenu->isFullscreen())
         || server_loading || ((cl.snap.ps.pm_flags & PMF_NO_HUD) || (cl.snap.ps.pm_flags & PMF_INTERMISSION))
-        || Cvar_Get("vr_hud", "1", CVAR_ARCHIVE)->integer) {
+        || vrHudActive) {
         if (crosshairhud) {
             crosshairhud->ForceHide();
         }
@@ -4014,6 +4024,7 @@ void UI_ResolutionChange(void)
 
     vr_compassX = Cvar_Get("vr_compassX", "0.5", CVAR_ARCHIVE);
     vr_compassY = Cvar_Get("vr_compassY", "0.62", CVAR_ARCHIVE);
+    ui_vrHud = Cvar_Get("vr_hud", "1", CVAR_ARCHIVE);
 
     CL_FillUIImports();
     CL_FillUIDef();

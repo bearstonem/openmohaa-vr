@@ -1505,7 +1505,7 @@ void RB_ExecuteRenderCommands( const void *data ) {
 		default:
 			// stop rendering
 			t2 = ri.Milliseconds ();
-			backEnd.pc.msec = t2 - t1;
+			backEnd.pc.msec += t2 - t1;
 			return;
 		}
 	}

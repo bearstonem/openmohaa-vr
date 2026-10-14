@@ -683,8 +683,9 @@ void CG_InitializeObjectives()
     cg.ObjectivesCurrentAlpha = 0.0;
 
     for (i = 0; i < MAX_OBJECTIVES; i++) {
-        cg.Objectives[i].flags   = 0;
-        cg.Objectives[i].text[0] = 0;
+        // A new gamestate may already contain objectives (for example after
+        // loading a save). Subsequent changes arrive through configstrings.
+        CG_ProcessConfigString(CS_OBJECTIVES + i, qfalse);
     }
 }
 
@@ -706,10 +707,6 @@ void CG_DrawObjectives()
     float        fAlpha;
 
     iTotalNumLines = 0;
-    for (i = CS_OBJECTIVES; i < CS_OBJECTIVES + MAX_OBJECTIVES; ++i) {
-        CG_ProcessConfigString(i, qfalse);
-    }
-
     iCurrentObjective         = atoi(CG_ConfigString(CS_CURRENT_OBJECTIVE));
     fTimeDelta                = cg.ObjectivesAlphaTime - cg.time;
     cg.ObjectivesCurrentAlpha = cg.ObjectivesDesiredAlpha;
@@ -745,7 +742,7 @@ void CG_DrawObjectives()
     //  back into the eye buffers the pass became 0 and the objectives went
     //  straight back to invisible, which took a device run to notice.
     //
-    if (vr_objectivesAlways && vr_objectivesAlways->integer) {
+    if (vr_hudPass && vr_hudPass->integer && vr_objectivesAlways && vr_objectivesAlways->integer) {
         fAlpha = 1.0f;
     }
 
@@ -1612,29 +1609,36 @@ static void CG_DrawVRWheel(void)
     int         count = 0;
     int         i;
     float       cx, cy, radius;
+    vec2_t      textScale;
 
     if (!cgi.VR_GetWheel || !cgi.VR_GetWheel(&selection, names, (int)ARRAY_LEN(names), &count)) {
         return;
     }
 
-    if (count <= 0) {
+    if (count <= 0 || !cgs.media.objectiveFont) {
         return;
     }
 
-    //  The same virtual screen the objectives text uses. Computing a scale
-    //  from vidWidth/640 instead is not the same thing on this device - the
-    //  eye buffer is 1680x1760, nothing like 4:3 - and it put the ring off
-    //  the edge of the picture.
-    cx = 320.0f;
-    cy = 240.0f;
-    radius = 90.0f;
+    // Lay out the ring in eye pixels, then undo the text scale on both axes.
+    // Mixing virtual x with pixel y placed it at y=240 in a 1760-line eye.
+    textScale[0] = textScale[1] = cgs.glconfig.vidHeight / 1080.0f;
+    if (textScale[0] <= 0.0f) {
+        return;
+    }
+    cx = cgs.glconfig.vidWidth * 0.5f;
+    cy = cgs.glconfig.vidHeight * 0.5f;
+    radius = 120.0f * textScale[0];
+    if (count > (int)ARRAY_LEN(names)) {
+        count = (int)ARRAY_LEN(names);
+    }
 
     for (i = 0; i < count; i++) {
         //  Clockwise from straight up, matching the order the VR layer numbers
         //  the segments in - the two have to agree or the highlight lands on
         //  the wrong word.
         const float angle = (float)i * (2.0f * M_PI / (float)count);
-        const float x = cx + sinf(angle) * radius;
+        const float width = cgi.UI_FontStringWidth(cgs.media.objectiveFont, names[i], -1) * textScale[0];
+        const float x = cx + sinf(angle) * radius - width * 0.5f;
         const float y = cy - cosf(angle) * radius;
         vec4_t      colour;
 
@@ -1645,7 +1649,7 @@ static void CG_DrawVRWheel(void)
         }
 
         cgi.R_SetColor(colour);
-        cgi.R_DrawString(cgs.media.objectiveFont, names[i], x, y / cgs.uiHiResScale[1], -1, cgs.uiHiResScale);
+        cgi.R_DrawString(cgs.media.objectiveFont, names[i], x / textScale[0], y / textScale[1], -1, textScale);
     }
 
     cgi.R_SetColor(NULL);
@@ -1655,12 +1659,15 @@ void CG_Draw2D(void)
 {
     //
     // Added in OPM
-    //  In VR this is called twice with the frame split in half: once for the
-    //  panel on the player's wrist, and once more with the world, for the
-    //  couple of things that would be useless anywhere else. 0 is every flat
-    //  frame, where it is called once and draws the lot.
+    //  0 is the flat frame, 1 the wrist panel, 2 the world without its HUD,
+    //  and 3 a VR eye carrying both the world and the HUD.
     //
     const int pass = vr_hudPass ? vr_hudPass->integer : 0;
+
+    if (pass) {
+        // Keep damage feedback current even when the wrist panel is hidden.
+        CG_UpdateVRHud();
+    }
 
     if (pass != 2) {
         CG_UpdateCountdown();
@@ -1674,7 +1681,7 @@ void CG_Draw2D(void)
         //  headset is looking at. Drawing both would put the same text on the
         //  view twice, in two places, at two sizes.
         //
-        if (vr_hud && vr_hud->integer) {
+        if (pass && vr_hud && vr_hud->integer) {
             CG_DrawVRHud();
         } else {
             CG_DrawObjectives();

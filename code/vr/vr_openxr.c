@@ -355,6 +355,7 @@ typedef struct {
 	GLuint         *frameBuffers;
 	uint32_t        acquiredIndex;
 	qboolean        acquired;
+	qboolean        ready;
 } vrSwapchain_t;
 
 static struct {
@@ -394,6 +395,7 @@ static struct {
 	GLuint          uiFramebuffer;
 	qboolean        screenLayerActive;
 	qboolean        layerReady;
+	uint32_t        finishedEyeMask;
 	XrPosef         screenAnchor;
 	qboolean        screenAnchorValid;
 
@@ -674,6 +676,7 @@ static const vrHolster_t vrHolsters[] = {
 
 static cvar_t *vr_traceTracking;
 static cvar_t *vr_traceFrame;
+static cvar_t *vr_traceGpu;
 static cvar_t *vr_captureEye;
 static cvar_t *vr_reloadTapMs;
 static cvar_t *vr_holsters;
@@ -1072,6 +1075,9 @@ qboolean VR_Init(void)
 	// On by default while the frame budget is still an open question; there is
 	// no console in the headset to turn it on with when it is wanted.
 	vr_traceFrame = Cvar_Get("vr_traceFrame", "1", 0);
+	// Synchronous GPU timing stalls both eye passes. Keep it separate from
+	// ordinary frame tracing so measuring CPU time does not change the budget.
+	vr_traceGpu = Cvar_Get("vr_traceGpu", "0", 0);
 	// Read by the game, which otherwise clamps where the player may look while
 	// they are climbing - see Player::PlayerAngles.
 	Cvar_Set2("vr_freeLook", "1", qtrue);
@@ -1290,7 +1296,67 @@ static void VR_DestroySwapchain(vrSwapchain_t *swapchain)
 	}
 
 	swapchain->acquired = qfalse;
+	swapchain->ready = qfalse;
 	swapchain->imageCount = 0;
+}
+
+/*
+An acquired image may still belong to the compositor until its wait succeeds.
+XR_TIMEOUT_EXPIRED is a success-class result, but does not permit rendering or
+release. Keep that image pending and retry its wait on the next frame instead
+of acquiring another image and eventually exhausting the swapchain.
+*/
+static qboolean VR_AcquireSwapchain(vrSwapchain_t *swapchain)
+{
+	XrSwapchainImageAcquireInfo acquireInfo;
+	XrSwapchainImageWaitInfo waitInfo;
+	XrResult result;
+
+	if (!swapchain->acquired) {
+		memset(&acquireInfo, 0, sizeof(acquireInfo));
+		acquireInfo.type = XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO;
+		if (!XR_CHECK(xrAcquireSwapchainImage(swapchain->handle, &acquireInfo,
+			&swapchain->acquiredIndex))) {
+			return qfalse;
+		}
+		swapchain->acquired = qtrue;
+		swapchain->ready = qfalse;
+	}
+
+	if (!swapchain->ready) {
+		memset(&waitInfo, 0, sizeof(waitInfo));
+		waitInfo.type = XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO;
+		waitInfo.timeout = 100 * 1000 * 1000;
+		result = xrWaitSwapchainImage(swapchain->handle, &waitInfo);
+		if (result == XR_TIMEOUT_EXPIRED || !VR_CheckResult(result, "xrWaitSwapchainImage")) {
+			return qfalse;
+		}
+		swapchain->ready = qtrue;
+	}
+
+	return qtrue;
+}
+
+static qboolean VR_ReleaseSwapchain(vrSwapchain_t *swapchain)
+{
+	XrSwapchainImageReleaseInfo releaseInfo;
+
+	if (!swapchain->acquired || !swapchain->ready) {
+		return qfalse;
+	}
+
+	// As in RTCWQuest's EFXR_SwapWindow: submit the commands without waiting
+	// for GPU completion. OpenXR synchronizes compositor access after release.
+	glFlush();
+	memset(&releaseInfo, 0, sizeof(releaseInfo));
+	releaseInfo.type = XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO;
+	if (!XR_CHECK(xrReleaseSwapchainImage(swapchain->handle, &releaseInfo))) {
+		return qfalse;
+	}
+
+	swapchain->acquired = qfalse;
+	swapchain->ready = qfalse;
+	return qtrue;
 }
 
 /*
@@ -3893,6 +3959,11 @@ qboolean VR_BeginFrame(void)
 
 	vr.frameStarted = qtrue;
 	vr.viewsValid = qfalse;
+	vr.finishedEyeMask = 0;
+	vr.layerReady = qfalse;
+	vr.screenLayerActive = qfalse;
+	vr.pointerLayerReady = qfalse;
+	vr.wristLayerReady = qfalse;
 
 	memset(&locateInfo, 0, sizeof(locateInfo));
 	locateInfo.type = XR_TYPE_VIEW_LOCATE_INFO;
@@ -3905,6 +3976,7 @@ qboolean VR_BeginFrame(void)
 
 	if (XR_CHECK(xrLocateViews(vr.session, &locateInfo, &viewState, VR_MAX_EYES,
 			&viewCount, vr.views))
+		&& viewCount == VR_MAX_EYES
 		&& (viewState.viewStateFlags & XR_VIEW_STATE_POSITION_VALID_BIT)
 		&& (viewState.viewStateFlags & XR_VIEW_STATE_ORIENTATION_VALID_BIT)) {
 
@@ -3957,7 +4029,7 @@ qboolean VR_BeginFrame(void)
 	// both eyes, and on a menu frame into both eye images again.
 	vr.beamVertexCount = VR_BuildBeamGeometry(vr.beamVerts, ARRAY_LEN(vr.beamVerts) / 3);
 
-	return vr.frameState.shouldRender ? qtrue : qfalse;
+	return (vr.frameState.shouldRender && vr.viewsValid) ? qtrue : qfalse;
 }
 
 /*
@@ -3979,34 +4051,20 @@ void VR_GetEyeView(int eye, vrEyeView_t *view)
 VR_PrepareEye
 ==================
 */
-void VR_PrepareEye(int eye)
+qboolean VR_PrepareEye(int eye)
 {
 	vrSwapchain_t                  *swapchain;
-	XrSwapchainImageAcquireInfo     acquireInfo;
-	XrSwapchainImageWaitInfo        waitInfo;
 
-	if (!vr.frameStarted || eye < 0 || eye >= VR_MAX_EYES) {
-		return;
+	if (!vr.frameStarted || !vr.viewsValid || eye < 0 || eye >= VR_MAX_EYES) {
+		return qfalse;
 	}
 
 	swapchain = &vr.swapchains[eye];
 
-	memset(&acquireInfo, 0, sizeof(acquireInfo));
-	acquireInfo.type = XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO;
-
-	if (!XR_CHECK(xrAcquireSwapchainImage(swapchain->handle, &acquireInfo, &swapchain->acquiredIndex))) {
-		return;
+	if (!VR_AcquireSwapchain(swapchain)) {
+		return qfalse;
 	}
 
-	memset(&waitInfo, 0, sizeof(waitInfo));
-	waitInfo.type = XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO;
-	waitInfo.timeout = 100 * 1000 * 1000; // 100ms; never block the frame loop forever
-
-	if (!XR_CHECK(xrWaitSwapchainImage(swapchain->handle, &waitInfo))) {
-		return;
-	}
-
-	swapchain->acquired = qtrue;
 	vr.eyeStart = Sys_Milliseconds();
 
 	// Tell the renderer before moving the target, not after.
@@ -4039,6 +4097,7 @@ void VR_PrepareEye(int eye)
 			view->tanLeft, view->tanRight, view->tanUp, view->tanDown,
 			vr.baseYaw, eye);
 	}
+	return qtrue;
 }
 
 /*
@@ -4246,7 +4305,7 @@ static void VR_CaptureEye(int eye)
 void VR_FinishEye(int eye)
 {
 	vrSwapchain_t                *swapchain;
-	XrSwapchainImageReleaseInfo   releaseInfo;
+	qboolean                     released;
 
 	if (!vr.frameStarted || eye < 0 || eye >= VR_MAX_EYES) {
 		return;
@@ -4254,7 +4313,7 @@ void VR_FinishEye(int eye)
 
 	swapchain = &vr.swapchains[eye];
 
-	if (!swapchain->acquired) {
+	if (!swapchain->acquired || !swapchain->ready) {
 		return;
 	}
 
@@ -4300,11 +4359,18 @@ void VR_FinishEye(int eye)
 	// Diagnostic only, and expensive by design: waiting for the GPU to actually
 	// finish is the only way to tell work from queueing. Everything measured so
 	// far is wall clock, which charges whichever call happens to block.
-	{
+	if (vr_traceGpu && vr_traceGpu->integer) {
 		const int gpuStart = Sys_Milliseconds();
 
 		glFinish();
 		vr.phaseGpu += Sys_Milliseconds() - gpuStart;
+	}
+
+	// The compositor only consumes color. Discard transient depth/stencil
+	// while this eye is still bound so the tiler need not store them to RAM.
+	{
+		const GLenum attachments[] = { GL_DEPTH_ATTACHMENT, GL_STENCIL_ATTACHMENT };
+		glInvalidateFramebuffer(GL_FRAMEBUFFER, ARRAY_LEN(attachments), attachments);
 	}
 
 	if (re.SetDefaultFramebuffer) {
@@ -4319,16 +4385,13 @@ void VR_FinishEye(int eye)
 		re.SetVRView(NULL, NULL, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0);
 	}
 
-	memset(&releaseInfo, 0, sizeof(releaseInfo));
-	releaseInfo.type = XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO;
-	XR_CHECK(xrReleaseSwapchainImage(swapchain->handle, &releaseInfo));
-
-	swapchain->acquired = qfalse;
+	released = VR_ReleaseSwapchain(swapchain);
 	vr.phaseEyes += Sys_Milliseconds() - vr.eyeStart;
-
-	if (eye == VR_MAX_EYES - 1) {
-		vr.layerReady = qtrue;
+	if (!released) {
+		return;
 	}
+	vr.finishedEyeMask |= 1u << eye;
+	vr.layerReady = vr.finishedEyeMask == (1u << VR_MAX_EYES) - 1u;
 
 	vr.projectionViews[eye].type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW;
 	vr.projectionViews[eye].next = NULL;
@@ -4890,28 +4953,8 @@ static void VR_RenderPointerLayer(void)
 
 	for (eye = 0; eye < VR_MAX_EYES; eye++) {
 		vrSwapchain_t               *swapchain = &vr.swapchains[eye];
-		XrSwapchainImageAcquireInfo  acquireInfo;
-		XrSwapchainImageWaitInfo     waitInfo;
-		XrSwapchainImageReleaseInfo  releaseInfo;
 
-		memset(&acquireInfo, 0, sizeof(acquireInfo));
-		acquireInfo.type = XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO;
-
-		if (!XR_CHECK(xrAcquireSwapchainImage(swapchain->handle, &acquireInfo, &swapchain->acquiredIndex))) {
-			return;
-		}
-
-		memset(&releaseInfo, 0, sizeof(releaseInfo));
-		releaseInfo.type = XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO;
-
-		memset(&waitInfo, 0, sizeof(waitInfo));
-		waitInfo.type = XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO;
-		waitInfo.timeout = 100 * 1000 * 1000;
-
-		// Released even when the wait fails: the image is acquired either way,
-		// and holding one back starves the swapchain within a few frames.
-		if (!XR_CHECK(xrWaitSwapchainImage(swapchain->handle, &waitInfo))) {
-			XR_CHECK(xrReleaseSwapchainImage(swapchain->handle, &releaseInfo));
+		if (!VR_AcquireSwapchain(swapchain)) {
 			return;
 		}
 
@@ -4924,13 +4967,15 @@ static void VR_RenderPointerLayer(void)
 		// menu is the one place the beam actually has a job.
 		glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
 		VR_DepthMask(GL_TRUE);
-	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
 
 		VR_DrawBeam(eye, vr.beamVerts, vr.beamVertexCount);
 
 		VR_BindFramebuffer(0);
 
-		XR_CHECK(xrReleaseSwapchainImage(swapchain->handle, &releaseInfo));
+		if (!VR_ReleaseSwapchain(swapchain)) {
+			return;
+		}
 
 		vr.projectionViews[eye].type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW;
 		vr.projectionViews[eye].next = NULL;
@@ -5083,9 +5128,6 @@ VR_FinishScreenLayer
 void VR_FinishScreenLayer(void)
 {
 	vrSwapchain_t               *swapchain = &vr.uiSwapchain;
-	XrSwapchainImageAcquireInfo  acquireInfo;
-	XrSwapchainImageWaitInfo     waitInfo;
-	XrSwapchainImageReleaseInfo  releaseInfo;
 
 	if (!vr.frameStarted) {
 		return;
@@ -5098,18 +5140,7 @@ void VR_FinishScreenLayer(void)
 		re.SetDefaultFramebuffer(0);
 	}
 
-	memset(&acquireInfo, 0, sizeof(acquireInfo));
-	acquireInfo.type = XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO;
-
-	if (!XR_CHECK(xrAcquireSwapchainImage(swapchain->handle, &acquireInfo, &swapchain->acquiredIndex))) {
-		return;
-	}
-
-	memset(&waitInfo, 0, sizeof(waitInfo));
-	waitInfo.type = XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO;
-	waitInfo.timeout = 100 * 1000 * 1000;
-
-	if (!XR_CHECK(xrWaitSwapchainImage(swapchain->handle, &waitInfo))) {
+	if (!VR_AcquireSwapchain(swapchain)) {
 		return;
 	}
 
@@ -5130,11 +5161,9 @@ void VR_FinishScreenLayer(void)
 
 	VR_BindFramebuffer(0);
 
-	memset(&releaseInfo, 0, sizeof(releaseInfo));
-	releaseInfo.type = XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO;
-	XR_CHECK(xrReleaseSwapchainImage(swapchain->handle, &releaseInfo));
-
-	swapchain->acquired = qfalse;
+	if (!VR_ReleaseSwapchain(swapchain)) {
+		return;
+	}
 	vr.screenLayerActive = qtrue;
 	vr.layerReady = qtrue;
 
@@ -5255,9 +5284,6 @@ VR_FinishWristPanel
 void VR_FinishWristPanel(void)
 {
 	vrSwapchain_t               *swapchain = &vr.uiSwapchain;
-	XrSwapchainImageAcquireInfo  acquireInfo;
-	XrSwapchainImageWaitInfo     waitInfo;
-	XrSwapchainImageReleaseInfo  releaseInfo;
 
 	vr.wristLayerReady = qfalse;
 
@@ -5269,22 +5295,7 @@ void VR_FinishWristPanel(void)
 		re.SetDefaultFramebuffer(0);
 	}
 
-	memset(&acquireInfo, 0, sizeof(acquireInfo));
-	acquireInfo.type = XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO;
-
-	if (!XR_CHECK(xrAcquireSwapchainImage(swapchain->handle, &acquireInfo, &swapchain->acquiredIndex))) {
-		return;
-	}
-
-	memset(&releaseInfo, 0, sizeof(releaseInfo));
-	releaseInfo.type = XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO;
-
-	memset(&waitInfo, 0, sizeof(waitInfo));
-	waitInfo.type = XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO;
-	waitInfo.timeout = 100 * 1000 * 1000;
-
-	if (!XR_CHECK(xrWaitSwapchainImage(swapchain->handle, &waitInfo))) {
-		XR_CHECK(xrReleaseSwapchainImage(swapchain->handle, &releaseInfo));
+	if (!VR_AcquireSwapchain(swapchain)) {
 		return;
 	}
 
@@ -5298,9 +5309,9 @@ void VR_FinishWristPanel(void)
 
 	VR_BindFramebuffer(0);
 
-	XR_CHECK(xrReleaseSwapchainImage(swapchain->handle, &releaseInfo));
-
-	swapchain->acquired = qfalse;
+	if (!VR_ReleaseSwapchain(swapchain)) {
+		return;
+	}
 	vr.wristLayerReady = qtrue;
 }
 
@@ -5364,11 +5375,12 @@ static void VR_TraceFrameTiming(void)
 		(vr.phaseEyes - vr.phaseWorld - vr.phaseHud) / frames);
 
 	Com_Printf("VR paths: draw2d %d cgame2d %d updateviews %d view3d %d"
-		" | mode %d hudPass %d noMenus %d | res %ux%u | gpuwait %dms\n",
+		" | mode %d hudPass %d noMenus %d | res %ux%u | gpuwait %dms (enabled %d)\n",
 		vr.traceEvents[VRTRACE_DRAW2D], vr.traceEvents[VRTRACE_CGAME_HUD],
 		vr.traceEvents[VRTRACE_UPDATEVIEWS], vr.traceEvents[VRTRACE_VIEW3D],
 		vr.traceDrawMode, vr.traceHudPass, vr.traceNoMenus,
-		vr.eyeWidth, vr.eyeHeight, vr.phaseGpu / frames);
+		vr.eyeWidth, vr.eyeHeight, vr.phaseGpu / frames,
+		vr_traceGpu && vr_traceGpu->integer ? 1 : 0);
 
 	Com_Printf("VR hud: setup %dms fades %dms cgame %dms prints %dms overlays %dms tail %dms\n",
 		vr.hudSetup / frames, vr.hudFades / frames, vr.phaseCgameHud / frames,

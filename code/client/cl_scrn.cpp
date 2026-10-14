@@ -532,10 +532,12 @@ void SCR_SimpleUpdateScreen( void ) {
 				const qboolean split = VR_WristPanelEnabled();
 
 				cl_vrDrawMode = split ? VRDRAW_WORLD : VRDRAW_ALL;
-				Cvar_Set( "vr_hudPass", split ? "2" : "0" );
+				Cvar_Set( "vr_hudPass", split ? "2" : "3" );
 
 				for( eye = 0; eye < VR_MAX_EYES; eye++ ) {
-					VR_PrepareEye( eye );
+					if( !VR_PrepareEye( eye ) ) {
+						continue;
+					}
 
 					// Deliberately STEREO_CENTER for both eyes.
 					// STEREO_LEFT/RIGHT select the GL_BACK_LEFT/RIGHT draw

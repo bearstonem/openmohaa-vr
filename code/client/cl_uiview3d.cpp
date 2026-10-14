@@ -50,9 +50,11 @@ View3D::View3D()
     setBorderStyle(border_none);
     AllowActivate(true);
 
-    m_printfadetime = 0.0;
-    m_print_mat     = NULL;
-    m_locationprint = qfalse;
+    m_printfadetime      = 0.0;
+    m_printUpdateTime    = cls.realtime;
+    m_subtitleUpdateTime = cls.realtime;
+    m_print_mat          = NULL;
+    m_locationprint      = qfalse;
 }
 
 void View3D::UpdateCenterPrint(const char *s, float alpha)
@@ -65,19 +67,21 @@ void View3D::UpdateCenterPrint(const char *s, float alpha)
         m_print_mat = NULL;
     }
 
-    m_printalpha    = alpha;
-    m_printfadetime = 4000.0;
-    m_locationprint = qfalse;
+    m_printalpha      = alpha;
+    m_printfadetime   = 4000.0;
+    m_printUpdateTime = cls.realtime;
+    m_locationprint   = qfalse;
 }
 
 void View3D::UpdateLocationPrint(int x, int y, const char *s, float alpha)
 {
-    m_printstring   = s;
-    m_printalpha    = alpha;
-    m_printfadetime = 4000.0;
-    m_x_coord       = x;
-    m_y_coord       = y;
-    m_locationprint = qtrue;
+    m_printstring     = s;
+    m_printalpha      = alpha;
+    m_printfadetime   = 4000.0;
+    m_printUpdateTime = cls.realtime;
+    m_x_coord         = x;
+    m_y_coord         = y;
+    m_locationprint   = qtrue;
 }
 
 void View3D::FrameInitialized(void)
@@ -647,6 +651,17 @@ void View3D::Draw2D(void)
 #endif
 }
 
+// Fixed in OPM
+//  Advance by elapsed client time, not by the number of rendered eyes.
+void View3D::UpdatePrintTime(void)
+{
+    const int elapsed = cls.realtime - m_printUpdateTime;
+    m_printUpdateTime = cls.realtime;
+    if (elapsed > 0) {
+        m_printfadetime = Q_max(0.0f, m_printfadetime - elapsed);
+    }
+}
+
 void View3D::CenterPrint(void)
 {
     float       alpha;
@@ -655,6 +670,7 @@ void View3D::CenterPrint(void)
     float       x, y;
     float       w, h;
 
+    UpdatePrintTime();
     if (!m_printfadetime) {
         return;
     }
@@ -703,12 +719,6 @@ void View3D::CenterPrint(void)
 
         re.DrawStretchPic(x, y, w, h, 0, 0, 1, 1, mat);
     }
-
-    m_printfadetime -= cls.frametime;
-
-    if (m_printfadetime < 0) {
-        m_printfadetime = 0;
-    }
 }
 
 void View3D::LocationPrint(void)
@@ -720,6 +730,7 @@ void View3D::LocationPrint(void)
     float             alpha;
     UIRect2D          frame;
 
+    UpdatePrintTime();
     if (!m_printfadetime) {
         m_locationprint = false;
         return;
@@ -774,11 +785,6 @@ void View3D::LocationPrint(void)
     );
 
     m_font->setColor(UBlack);
-    m_printfadetime -= cls.frametime;
-
-    if (m_printfadetime < 0) {
-        m_printfadetime = 0;
-    }
 }
 
 void View3D::DrawLetterbox(void)
@@ -821,11 +827,10 @@ void View3D::DrawFades(void)
 
 void View3D::Draw(void)
 {
-    const int drawStart = Sys_Milliseconds();
 #ifdef USE_OPENXR
+    const int drawStart = Sys_Milliseconds();
     VR_TraceEvent(VRTRACE_VIEW3D);
 #endif
-    int       hudStart;
 
     //
     // Added in OPM
@@ -838,8 +843,6 @@ void View3D::Draw(void)
         SCR_DrawScreenField();
     }
 
-    hudStart = Sys_Milliseconds();
-
     if (cl_vrDrawMode == VRDRAW_WORLD) {
         //
         // Added in OPM
@@ -847,8 +850,16 @@ void View3D::Draw(void)
         //  the scope surround, which have to stay with the world - see
         //  CG_Draw2D, which draws only those while vr_hudPass says so.
         //
+#ifdef USE_OPENXR
+        int hudStart = Sys_Milliseconds();
+#endif
         if (cge && !cls.no_menus) {
             set2D();
+            // Set2DWindow flushes the queued world commands. Charge that
+            // work to the world before starting the HUD timer.
+#ifdef USE_OPENXR
+            hudStart = Sys_Milliseconds();
+#endif
             cge->CG_Draw2D();
         }
 #ifdef USE_OPENXR
@@ -857,20 +868,14 @@ void View3D::Draw(void)
         return;
     }
 
-#ifdef USE_OPENXR
-    {
-        const int setupStart = Sys_Milliseconds();
-
-        set2D();
-        re.SavePerformanceCounters();
-
-        VR_TraceHudParts(Sys_Milliseconds() - setupStart, 0, 0, 0, 0);
-    }
-#else
     set2D();
 
-    re.SavePerformanceCounters();
+#ifdef USE_OPENXR
+    // The transition issues the pending world draw calls; starting the timer
+    // before it incorrectly reports those calls as HUD setup time.
+    const int hudStart = Sys_Milliseconds();
 #endif
+    re.SavePerformanceCounters();
 
     Draw2D();
 
@@ -885,6 +890,7 @@ void View3D::InitSubtitle(void)
 {
     float totalWidth;
 
+    m_subtitleUpdateTime = cls.realtime;
     for (int i = 0; i < 4; i++) {
         subs[i]  = Cvar_Get(va("subtitle%d", i), "", 0);
         teams[i] = Cvar_Get(va("subteam%d", i), "0", 0);
@@ -907,6 +913,9 @@ void View3D::DrawSubtitleOverlay(void)
     int     i;
     float   minX, maxX;
     int     line;
+    const int elapsed = Q_max(0, cls.realtime - m_subtitleUpdateTime);
+
+    m_subtitleUpdateTime = cls.realtime;
 
     subAlpha = Cvar_Get("subAlpha", "0.5", 0);
 
@@ -918,6 +927,15 @@ void View3D::DrawSubtitleOverlay(void)
             fadeTime[i] = 2500 * ((strlen(subs[i]->string) / 68) + 1.f) + 1500;
             subLife[i]  = fadeTime[i];
             Q_strncpyz(oldStrings[i], subs[i]->string, sizeof(oldStrings[i]));
+        } else {
+            fadeTime[i] = Q_max(0.0f, fadeTime[i] - elapsed);
+        }
+
+        if (fadeTime[i] <= 0) {
+            oldStrings[i][0] = 0;
+            if (subs[i]->string && subs[i]->string[0]) {
+                Cvar_Set(va("subtitle%d", i), "");
+            }
         }
 
         if (fadeTime[i] > subLife[i] - 750.f) {
@@ -926,17 +944,6 @@ void View3D::DrawSubtitleOverlay(void)
             alpha[i] = fadeTime[i] / 750.f;
         } else {
             alpha[i] = 1.f;
-        }
-
-        fadeTime[i] -= cls.frametime;
-        if (fadeTime[i] < 0) {
-            // Clear the subtitle
-            fadeTime[i]      = 0;
-            oldStrings[i][0] = 0;
-
-            if (subs[i]->string && subs[i]->string[0]) {
-                Cvar_Set(va("subtitle%d", i), "");
-            }
         }
     }
 

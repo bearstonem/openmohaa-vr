@@ -616,6 +616,8 @@ extern "C" {
     //
     // cg_vrhud.cpp
     //
+    void CG_InitVRHud(void);
+    void CG_UpdateVRHud(void);
     void CG_DrawVRHud(void);
 
     void  CG_EyePosition(vec3_t *o_vPos);

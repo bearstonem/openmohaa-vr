@@ -231,7 +231,7 @@ void CG_RegisterCvars(void)
     //
 
     cg_fov = cgi.Cvar_Get("cg_fov", "80", CVAR_ARCHIVE);
-    // Set by the client around each half of a split VR frame; 0 on flat frames.
+    // 0 flat, 1 wrist panel, 2 world only, 3 combined VR world and HUD.
     vr_hudPass = cgi.Cvar_Get("vr_hudPass", "0", 0);
     vr_crosshair = cgi.Cvar_Get("vr_crosshair", "0", CVAR_ARCHIVE);
     vr_traceObjectives = cgi.Cvar_Get("vr_traceObjectives", "0", 0);
@@ -712,6 +712,7 @@ void CG_GameStateReceived(void)
     CG_InitializeSpecialEffectsManager();
 
     CG_InitializeObjectives();
+    CG_InitVRHud();
 }
 
 /*
@@ -743,6 +744,7 @@ void CG_ServerRestarted(void)
     CG_ResetVSSSources();
     // Reset objectives
     CG_InitializeObjectives();
+    CG_InitVRHud();
 }
 
 /*

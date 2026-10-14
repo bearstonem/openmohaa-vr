@@ -108,7 +108,10 @@ void R_IssueRenderCommands( qboolean runPerformanceCounters ) {
 	cmdList->used = 0;
 
 	if ( runPerformanceCounters ) {
+		int backEndMsec = backEnd.pc.msec;
 		R_PerformanceCounters();
+		// EndFrame still needs the time spent in earlier command batches.
+		backEnd.pc.msec = backEndMsec;
 	}
 
 	// actually start the commands going
@@ -127,7 +130,7 @@ Issue any pending commands and wait for them to complete.
 ====================
 */
 void R_IssuePendingRenderCommands( void ) {
-	if ( !tr.registered ) {
+	if ( !tr.registered || !backEndData->commands.used ) {
 		return;
 	}
 	R_IssueRenderCommands( qfalse );

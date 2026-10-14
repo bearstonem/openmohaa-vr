@@ -5,7 +5,25 @@ Companion to `VR_PORT_PLAN.md`, which is the original survey and plan, and to
 This records what has actually been built, what was learned that contradicts the
 plan, and what to do next.
 
-Branch `vr-quest3`. Everything below is committed.
+Branch `vr-quest3`. The historical status below records previously committed work.
+
+### Code review update — September 29, 2026
+
+These fixes remove the unconditional GPU wait after each eye;
+`vr_traceGpu 1` restores that wait only for diagnostics. Normal submission flushes
+commands and discards the eye's transient depth/stencil buffers. Swapchain timeouts
+now retain the acquired image for retry, and stereo submission requires both eyes.
+World/HUD timing now charges the first 2D transition's world flush to the world,
+and backend timing accumulates all command batches in an eye.
+
+The review also fixes desktop HUD suppression, objective initialization, HUD
+resource resets, health colors, weapon-wheel placement, stereo text lifetimes,
+font shader passes, and sprite culling and upright sprite disappearance when
+looking vertically. CMake now tracks additions to the client-game source list.
+No headset was connected for this review: the measured frame rates and visual
+observations below predate these changes. Device validation is still needed.
+The existing font-atlas texture issue and dynamic-light darkening remain
+unresolved; `r_worldDlights 0` in `autoexec.cfg` remains the lighting workaround.
 
 **On any problem this port is trying to solve, read RTCWQuest first.** It is
 cloned at `/home/berkybear/RTCWQuest`, clean at `4c714b9`, and it is finished.

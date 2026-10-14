@@ -12,7 +12,7 @@ file(GLOB_RECURSE BG_SOURCES
     ${SOURCE_DIR}/fgame/bg_voteoptions.cpp
 )
 
-file(GLOB_RECURSE CGAME_SOURCES
+file(GLOB_RECURSE CGAME_SOURCES CONFIGURE_DEPENDS
     ${SOURCE_DIR}/cgame/*.c ${SOURCE_DIR}/cgame/*.cpp
 )
 

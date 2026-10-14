@@ -61,13 +61,13 @@ static int CullSprite(const vec3_t* points) {
 
 	for (i = 0; i < backEnd.viewParms.fog.extrafrustums + 4; i++) {
 		for (j = 0; j < 4; j++) {
-			if (DotProduct(points[j], backEnd.viewParms.frustum[i].normal) - backEnd.viewParms.frustum[i].dist > 0.0f) {
+			if (DotProduct(points[j], backEnd.viewParms.frustum[i].normal) >= backEnd.viewParms.frustum[i].dist) {
 				break;
 			}
 		}
 
 		if (j == 4) {
-			return CULL_CLIP;
+			return CULL_OUT;
 		}
 	}
 
@@ -87,15 +87,15 @@ void RB_DrawSprite( const refSprite_t *spr ) {
 	float org_x, org_y;
 	float scale;
 
-	if (!spr->hModel)
+	if (spr->hModel <= 0 || spr->hModel >= tr.numModels)
 	{
         ri.Printf(PRINT_WARNING, "No model found for Sprite\n");
         return;
 	}
 
-    model = tr.models;
-	if (spr->hModel > 0 && spr->hModel < tr.numModels) {
-		model = &tr.models[spr->hModel];
+	model = &tr.models[spr->hModel];
+	if (model->type != MOD_SPRITE || !model->d.sprite) {
+		return;
 	}
 
 	scale = spr->scale * model->d.sprite->scale;
@@ -108,10 +108,16 @@ void RB_DrawSprite( const refSprite_t *spr ) {
 			float cr, sr;
 			int i;
 
-			invmag = 1.0 / sqrt(spr->axis[1][2] * spr->axis[1][2] + spr->axis[1][1] * spr->axis[1][1]);
-
-			cr = invmag * spr->axis[1][1];
-			sr = invmag * spr->axis[1][2];
+			invmag = spr->axis[1][2] * spr->axis[1][2] + spr->axis[1][1] * spr->axis[1][1];
+			if (invmag > 0.0f) {
+				invmag = 1.0f / sqrt(invmag);
+				cr = invmag * spr->axis[1][1];
+				sr = invmag * spr->axis[1][2];
+			} else {
+				// No projected roll axis: keep the quad finite and unrotated.
+				cr = 1.0f;
+				sr = 0.0f;
+			}
 
 			for (i = 0; i < 3; i++)
 			{
@@ -158,9 +164,9 @@ void RB_DrawSprite( const refSprite_t *spr ) {
 		VectorCopy(backEnd.viewParms.ori.axis[0], norm);
 		VectorCopy(backEnd.viewParms.ori.axis[1], right);
 		VectorCopy(backEnd.viewParms.ori.axis[2], up);
-		if (backEnd.viewParms.ori.axis[0][2] > 0.999) {
-			return;
-		} else if (backEnd.viewParms.ori.axis[0][2] < -0.999) {
+		// VR facing comes from the viewer's position, so looking vertically
+		// does not make an otherwise visible upright sprite degenerate.
+		if (!vrView.active && fabs(backEnd.viewParms.ori.axis[0][2]) > 0.999f) {
 			return;
 		}
 
@@ -179,8 +185,9 @@ void RB_DrawSprite( const refSprite_t *spr ) {
 			if (VectorNormalize(toViewer) > 0.001f) {
 				VectorSet(right, -toViewer[1], toViewer[0], 0.0f);
 			} else {
-				VectorSet(right, backEnd.viewParms.ori.axis[0][1], -backEnd.viewParms.ori.axis[0][0], 0.0f);
-				VectorNormalize(right);
+				// Directly above/below: use a stable axis, even when the view
+				// direction is vertical too.
+				VectorSet(right, 1.0f, 0.0f, 0.0f);
 			}
 		} else {
 			VectorSet(right, backEnd.viewParms.ori.axis[0][1], -backEnd.viewParms.ori.axis[0][0], 0.0f);

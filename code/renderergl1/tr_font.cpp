@@ -535,10 +535,10 @@ void R_LoadFontShader(fontheader_sgl_t* font)
     {
         for (i = 0; i < fontshader->numUnfoggedPasses; i++)
         {
-            if (fontshader->unfoggedStages[0] != NULL && fontshader->unfoggedStages[0]->active)
+            if (fontshader->unfoggedStages[i] != NULL && fontshader->unfoggedStages[i]->active)
             {
-                fontshader->unfoggedStages[0]->rgbGen = CGEN_GLOBAL_COLOR;
-                fontshader->unfoggedStages[0]->alphaGen = AGEN_GLOBAL_ALPHA;
+                fontshader->unfoggedStages[i]->rgbGen = CGEN_GLOBAL_COLOR;
+                fontshader->unfoggedStages[i]->alphaGen = AGEN_GLOBAL_ALPHA;
             }
         }
 

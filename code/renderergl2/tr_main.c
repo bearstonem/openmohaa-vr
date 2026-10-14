@@ -3154,13 +3154,13 @@ void R_AddSpriteSurfaces()
 
 		tr.currentEntityNum = ENTITYNUM_WORLD;
         tr.shiftedEntityNum = tr.currentEntityNum << QSORT_REFENTITYNUM_SHIFT;
-		if (sprite->hModel && sprite->hModel < tr.numModels) {
+		if (sprite->hModel > 0 && sprite->hModel < tr.numModels) {
 			tr.currentModel = tr.models[sprite->hModel];
 		} else {
-			tr.currentModel = tr.models[0];
+			continue;
 		}
 
-		if (tr.currentModel->type != MOD_SPRITE) {
+		if (tr.currentModel->type != MOD_SPRITE || !tr.currentModel->d.sprite) {
 			continue;
 		}
 

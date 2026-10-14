@@ -54,10 +54,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // UI has always had it, as re.DrawTrianglePic, and it is what the retail compass
 // turns its own face with - and the three real layers are drawn here now.
 //
-// Still not the whole of the retail compass: the damage direction ring is not
-// drawn, and the objective is a pip rather than compassobjarrow. And the one
-// worth having is a different thing altogether - a compass the player pulls out
-// of a pocket and holds.
+// The damage ring and objective arrow share the card's origin and scale.
 
 #include "cg_local.h"
 
@@ -123,6 +120,37 @@ typedef struct {
 } vrHudMedia_t;
 
 static vrHudMedia_t vrHud;
+static qboolean vrHudPainInitialized;
+static int vrHudPainStat;
+static int vrHudPainTime = -1;
+static int vrHudLastTime;
+
+void CG_InitVRHud(void)
+{
+    memset(&vrHud, 0, sizeof(vrHud));
+    vrHudPainInitialized = qfalse;
+    vrHudPainTime = -1;
+}
+
+void CG_UpdateVRHud(void)
+{
+    if (!cg.snap || (cg.snap->ps.pm_flags & PMF_INTERMISSION)) {
+        return;
+    }
+
+    const int stat = cg.snap->ps.stats[STAT_DAMAGEDIR];
+
+    // Observe hits even while the requested HUD is hidden. Otherwise opening
+    // it replays the last hit, however long ago it happened.
+    if (!vrHudPainInitialized || cg.time < vrHudLastTime) {
+        vrHudPainInitialized = qtrue;
+        vrHudPainTime = -1;
+    } else if (stat != vrHudPainStat) {
+        vrHudPainTime = cg.time;
+    }
+    vrHudPainStat = stat;
+    vrHudLastTime = cg.time;
+}
 
 /*
 ================
@@ -133,20 +161,15 @@ the player is in a map with a snapshot, by which time the shaders are loadable;
 registering from the media pass would put these in front of every level load
 whether the HUD is switched on or not.
 
-The handles are dropped whenever the renderer's sequence changes underneath
-them, which a map change does, so this re-registers on the first frame of each
-map rather than holding a handle into the previous one.
+CG_InitVRHud drops the handles when a map or subsystem restarts. A map's start
+time is not a renderer sequence: two loads can have the same start time.
 ================
 */
 static void CG_VRHudRegister(void)
 {
-    static int registeredMap = -1;
-
-    if (vrHud.registered && registeredMap == cgs.levelStartTime) {
+    if (vrHud.registered) {
         return;
     }
-
-    registeredMap = cgs.levelStartTime;
 
     vrHud.compassBack   = cgi.R_RegisterShaderNoMip("textures/hud/compassback");
     vrHud.compassFace   = cgi.R_RegisterShaderNoMip("textures/hud/compassface");
@@ -392,8 +415,7 @@ static void CG_VRHudBar(float x, float y, float frac, float r, float g, float b,
 ================
 CG_VRHudCompass
 
-An upright ring with the cardinal letters orbiting it and a pip for the current
-objective.
+An upright ring with a turning compass card, damage ring and objective arrow.
 
 Two angles do all of it, and both are decoded exactly the way the retail widgets
 decode them, so they agree with the game rather than with a guess:
@@ -463,17 +485,10 @@ static void CG_VRHudCompass(float alpha)
     // widget starts it whenever the value changes and runs it down over 1500ms.
     //
     {
-        static int   painStat = -1;
-        static int   painTime;
         const int    stat = cg.snap->ps.stats[STAT_DAMAGEDIR];
 
-        if (stat != painStat) {
-            painStat = stat;
-            painTime = cg.time;
-        }
-
-        if (painTime && cg.time - painTime < 1500) {
-            const float fade = 1.0f - (cg.time - painTime) / 1500.0f;
+        if (vrHudPainTime >= 0 && cg.time - vrHudPainTime < 1500) {
+            const float fade = 1.0f - (cg.time - vrHudPainTime) / 1500.0f;
             float       frac = (AngleSubtract(eyeAngles[YAW], (stat / 3600.0f) * 360.0f + 180.0f) + 180.0f) / 360.0f;
 
             if (frac >= 0.0f && frac <= 1.0f) {
@@ -592,11 +607,12 @@ void CG_DrawVRHud(void)
     int   i;
     float objY;
 
-    if (!vr_hud || !vr_hud->integer) {
+    if (!vr_hudPass || !vr_hudPass->integer || !vr_hud || !vr_hud->integer
+        || !cg_hud || !cg_hud->integer) {
         return;
     }
 
-    if (!cg.snap || (cg.snap->ps.pm_flags & PMF_INTERMISSION)) {
+    if (!cg.snap || (cg.snap->ps.pm_flags & (PMF_NO_HUD | PMF_INTERMISSION))) {
         return;
     }
 
@@ -637,8 +653,6 @@ void CG_DrawVRHud(void)
         return;
     }
 
-    CG_VRHudRegister();
-
     alpha = vr_hudAlpha ? vr_hudAlpha->value : 1.0f;
     if (alpha > 1.0f) {
         alpha = 1.0f;
@@ -649,6 +663,8 @@ void CG_DrawVRHud(void)
     if (alpha <= 0.01f) {
         return;
     }
+
+    CG_VRHudRegister();
 
     //
     // Design units to pixels. The reference height keeps the cluster the same
@@ -662,7 +678,7 @@ void CG_DrawVRHud(void)
     }
 
     vrHudOriginX = cgs.glconfig.vidWidth * (vr_hudGroupX ? vr_hudGroupX->value : 0.5f);
-    vrHudOriginY = cgs.glconfig.vidHeight * (vr_hudGroupY ? vr_hudGroupY->value : 0.62f);
+    vrHudOriginY = cgs.glconfig.vidHeight * (vr_hudGroupY ? vr_hudGroupY->value : 0.92f);
 
     //
     // A backing plate, so the whole group reads as one object against whatever
@@ -728,12 +744,13 @@ void CG_DrawVRHud(void)
     }
 
     {
-        const float frac = health / maxHealth;
+        const float frac = Com_Clamp(0.0f, 1.0f, health / maxHealth);
 
         CG_VRHudText(VRHUD_HEALTH_X, VRHUD_BAR_Y - 17.0f, "HEALTH", 0.7f, 0.6f, 0.05f, alpha);
         // Green through amber to red, so the colour says as much as the length.
         CG_VRHudBar(
-            VRHUD_HEALTH_X, VRHUD_BAR_Y, frac, frac > 0.5f ? (2.0f - frac * 2.0f) : 1.0f, frac * 1.6f, 0.12f, alpha
+            VRHUD_HEALTH_X, VRHUD_BAR_Y, frac, frac > 0.5f ? (2.0f - frac * 2.0f) : 1.0f,
+            Com_Clamp(0.0f, 1.0f, frac * 1.6f), 0.12f, alpha
         );
         CG_VRHudText(
             VRHUD_HEALTH_X + VRHUD_BAR_W + 8.0f, VRHUD_BAR_Y - 2.0f, va("%d", (int)health), 1.0f, 1.0f, 1.0f, alpha
