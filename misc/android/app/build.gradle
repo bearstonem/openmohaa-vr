@@ -3,7 +3,7 @@ plugins {
 }
 
 // The native libraries are built by CMake, not by gradle. See
-// docs/markdown/android.md - build the engine first, then package it here.
+// docs/markdown/04-coding/03-android.md - build the engine first, then package it here.
 def nativeLibs = file(rootProject.file(nativeLibsDir).absolutePath)
 
 def sdlJava = sdlJavaDir?.trim()

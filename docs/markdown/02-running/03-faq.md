@@ -1,5 +1,10 @@
 # Frequently Asked Questions
 
+This FAQ describes the inherited desktop engine. For headset setup and known
+VR issues, see the [Quest guide](../04-coding/03-android.md) and
+[VR port status](../../../VR_PORT_STATUS.md). Report issues with this port in
+[OpenMoHAA VR](https://github.com/bearstonem/openmohaa-vr/issues).
+
 <details>
 <summary>The game won't start or crashes immediately. What should I check?</summary>
 
@@ -86,7 +91,7 @@ However, if `grenzuebergang_KE.pk3` is placed in the game installation folder (`
 `Pak1.pk3` contains the original `scripts/effects.shader` where the impact effect is declared; therefore, the player does not experience any issue, as the original file is "loaded" after the custom file. |
 
 ### 2. Create a new issue:
-If changing the file precedences has no effect on the glitch you discovered, you have probably found a new bug in the OpenMoHAA engine, so please <a href="https://github.com/openmoh/openmohaa/issues/new/choose">create a new issue</a> for the developers.
+If changing the file precedences has no effect, [report the issue in OpenMoHAA VR](https://github.com/bearstonem/openmohaa-vr/issues/new/choose). Include the mod, map, headset, release, and reproduction steps. If you also tested the upstream desktop engine, state whether it reproduces there.
 </details>
 
 ---

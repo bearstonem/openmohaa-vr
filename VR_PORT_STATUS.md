@@ -1,4 +1,13 @@
-# OpenMoHAA on Quest 3 — where the port stands
+# OpenMoHAA VR — platform status
+
+This repository develops a standalone Medal of Honor: Allied Assault VR port
+for **Meta Quest and Steam Frame**. The released build is currently the Android
+OpenXR port, tested on Quest 3. Other Quest models are unverified. Steam Frame
+is a development target: platform integration and device validation are pending,
+and no Steam Frame binary is available yet.
+
+The notes below document the existing Quest implementation and historical device
+measurements. They do not establish support or performance on Steam Frame.
 
 Companion to `VR_PORT_PLAN.md`, which is the original survey and plan, and to
 `VR_RENDERER_HANDOFF.md`, which covers the move to the fixed function renderer.

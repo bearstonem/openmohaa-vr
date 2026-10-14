@@ -1,6 +1,11 @@
 # Changelog
 
-All notable changes to this project will be documented in this file.
+For **OpenMoHAA VR** changes, see the [VR release notes](https://github.com/bearstonem/openmohaa-vr/releases)
+and [port status](VR_PORT_STATUS.md). Quest is the current release target;
+Steam Frame integration is in development.
+
+The changelog below is inherited from upstream OpenMoHAA and records engine
+changes. Its release links and version numbers belong to the upstream project.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).

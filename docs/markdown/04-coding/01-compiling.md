@@ -1,5 +1,10 @@
 # Compiling
 
+This is the inherited **desktop engine** build reference. For the standalone
+Quest port, follow the [Android/Quest build guide](03-android.md). Steam Frame
+integration is still pending; these desktop instructions do not produce a
+Steam Frame VR build. The architecture notes below describe upstream OpenMoHAA.
+
 OpenMoHAA supports any architecture, thanks to the CMake build system and cross-platform code/libraries. While the most common little-Endian architectures (arm, aarch64, x86, x86_64, ppc64le) have been tested and confirmed to work, big-Endian architectures should be supported as well; however, they remain untested.
 
 The following tools are required for all platforms:

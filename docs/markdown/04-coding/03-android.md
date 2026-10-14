@@ -1,201 +1,150 @@
-# Building for Android
+# Building OpenMoHAA VR for Meta Quest
 
-This covers building OpenMoHAA as an Android APK. It targets `arm64-v8a` and
-was brought up against a Meta Quest 3, but nothing here is headset specific —
-a phone or tablet builds the same way.
+OpenMoHAA VR runs **Medal of Honor: Allied Assault** in standalone VR through
+OpenXR. This guide builds the `arm64-v8a` Android APK for the Meta Quest family;
+Quest 3 is the tested headset. Other Quest models need validation. Steam Frame
+is a planned target; the current VR runtime implementation is Android-only.
 
-VR itself is not part of this. What you get is the ordinary game running as a
-normal Android app.
+You need the original retail Allied Assault game data. It is not included in
+this repository or the APK. Prebuilt packages are available from
+[OpenMoHAA VR releases](https://github.com/bearstonem/openmohaa-vr/releases).
 
-
-> **The gl4es boundary.** On Android the fixed function renderer runs on top of
-> gl4es, which keeps its own copy of GL state that can disagree with the driver.
-> If you are debugging anything that looks like *the geometry is correct and
-> nothing is drawn*, read [the gl4es boundary](04-gl4es.md) first.
+> On Android, the fixed function renderer runs through gl4es, which maintains
+> its own GL state. For rendering problems, read
+> [the gl4es boundary](04-gl4es.md) and the
+> [VR port status](../../../VR_PORT_STATUS.md).
 
 ## What you need
 
-| | |
+| Tool | Version |
 |---|---|
 | Android NDK | r26 or later |
-| Android SDK | platform 34, build-tools 34 |
-| JDK | 17 (required by the Android Gradle Plugin) |
+| Android SDK | platform 34, build-tools 34, platform-tools (`adb`) |
+| JDK | 17 |
 | Gradle | 8.0 or later |
 | CMake | 3.25 or later |
-| flex, bison | on the host, to generate the script parser |
+| Ninja, flex, bison | installed on the build host |
 
-Set `ANDROID_NDK_HOME` and `ANDROID_HOME` before you start.
+Set `ANDROID_NDK_HOME` and `ANDROID_HOME` to your installed NDK and SDK paths.
+Enable developer mode and USB debugging on the headset, and authorize the host
+when prompted. Run the following commands from the repository root unless a
+step says otherwise.
 
 ## 1. Build the engine
 
-Gradle does not drive the native build; CMake does, and gradle only packages
-the result. Configure with the NDK toolchain file:
+CMake builds the native libraries; Gradle packages them afterward.
 
 ```sh
-cmake -B build-android-arm64 -G Ninja \
-  -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
+cmake -B build-gl1 -G Ninja \
+  -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
   -DANDROID_ABI=arm64-v8a \
   -DANDROID_PLATFORM=android-29 \
   -DANDROID_STL=c++_shared \
   -DCMAKE_BUILD_TYPE=Release \
-  -DBUILD_SERVER=OFF
+  -DBUILD_SERVER=OFF \
+  -DBUILD_RENDERER_GL1=ON -DBUILD_RENDERER_GL2=OFF -DUSE_GL4ES=ON
 
-cmake --build build-android-arm64 -j$(nproc)
+cmake --build build-gl1 -j"$(nproc)"
 ```
 
-`ANDROID_STL=c++_shared` matters: the APK ships several libraries that use the
-C++ standard library, and they have to share one copy of it.
+`ANDROID_STL=c++_shared` lets the APK's native libraries share one C++ runtime.
+Android enables `USE_OPENXR` automatically. The default renderer is
+`renderergl1` through gl4es; the alternative GLES renderer can be selected with
+`-DBUILD_RENDERER_GL1=OFF -DBUILD_RENDERER_GL2=ON -DUSE_GL4ES=OFF`.
 
-SDL2, OpenAL Soft and gl4es have no Android binaries to fall back on, so all
-are downloaded and built from source. To build against trees you already have,
-pass `-DSDL2_SOURCE_PATH=...`, `-DOPENAL_SOURCE_PATH=...` and
-`-DGL4ES_SOURCE_PATH=...`.
+SDL2, OpenAL Soft, gl4es, and the Khronos OpenXR loader are downloaded and built
+from source. Existing source trees can be supplied with `SDL2_SOURCE_PATH`,
+`OPENAL_SOURCE_PATH`, `GL4ES_SOURCE_PATH`, and `OPENXR_SOURCE_PATH` CMake options.
+Android links the renderer into the client, disables HTTP downloads and QVM
+builds, and stages the APK libraries in `build-gl1/apk-libs/arm64-v8a/`.
 
-Several defaults change on Android, in `cmake/platforms/android.cmake`:
-
-- **`renderergl1` is the renderer**, with **`USE_GL4ES=ON`** underneath it.
-  renderergl1 is fixed function, which is what this game's art was authored
-  for, and gl4es translates its OpenGL 1.x calls to the OpenGL ES the device
-  actually has. renderergl2 speaks GLES directly and was the first thing to run
-  here, but it spends tens of milliseconds of CPU per eye binding GLSL programs
-  for lighting this content has no maps to feed. It is still reachable with
-  `-DBUILD_RENDERER_GL1=OFF -DBUILD_RENDERER_GL2=ON -DUSE_GL4ES=OFF`.
-- **`USE_RENDERER_DLOPEN=OFF`** — the renderer is linked into the client
-  rather than loaded from a path the Android linker may object to.
-- **`USE_HTTP=OFF`** — only used for downloading content from a server.
-- **`BUILD_GAME_QVMS=OFF`** — the QVM toolchain is not part of this build.
-
-The build stages everything the APK needs into
-`build-android-arm64/apk-libs/arm64-v8a/`.
-
-## 2. Build the APK
+## 2. Package the APK
 
 ```sh
 cd misc/android
-gradle assembleDebug
+gradle assembleDebug -PnativeLibsDir=../../build-gl1/apk-libs
+cd ../..
 ```
 
-The result is `misc/android/app/build/outputs/apk/debug/app-debug.apk`.
+The output is `misc/android/app/build/outputs/apk/debug/app-debug.apk`. Keep the
+`nativeLibsDir` override: the checked-in Gradle default names a different build
+directory. For another build location, supply its absolute `apk-libs` path.
 
-If your build tree is somewhere else, point gradle at it:
+Gradle reads `android-build.properties` beside `apk-libs` to find the SDL Java
+classes belonging to the SDL library CMake built. Do not mix those classes with
+a different SDL version. After rebuilding, verify that the APK is newer than the
+staged native libraries so you install the current code.
 
-```sh
-gradle assembleDebug -PnativeLibsDir=/path/to/build/apk-libs
-```
-
-Gradle picks up SDL's `org.libsdl.app` Java classes from the SDL tree CMake
-built against — it reads the path out of `android-build.properties` in the
-build directory. They have to match the `libSDL2.so` that was linked, so do
-not point them at a different SDL.
-
-## 3. Install and add the game data
+## 3. Install the APK and retail data
 
 ```sh
 adb install -r misc/android/app/build/outputs/apk/debug/app-debug.apk
+adb shell am force-stop org.openmoh.openmohaa
 ```
 
-No game data ships with the app. It goes in the app's own external files
-directory, which is also where the engine writes its config and saves:
+The Android package ID remains `org.openmoh.openmohaa`, including for upgrades.
+Launch the app once from inside the headset to initialize its external files
+directory, then close it. Game data belongs in:
 
-```
-/sdcard/Android/data/org.openmoh.openmohaa/files/
+```text
+/sdcard/Android/data/org.openmoh.openmohaa/files/main/
 ```
 
-Copy your retail `main/` directory there:
+Copy **all** Allied Assault `.pk3` archives from your retail installation's
+`main/` directory. Replace the example source path below with your own:
 
 ```sh
 adb shell mkdir -p /sdcard/Android/data/org.openmoh.openmohaa/files/main
-adb push main/pak0.pk3 /sdcard/Android/data/org.openmoh.openmohaa/files/main/
+adb push /path/to/retail/main/*.pk3 \
+  /sdcard/Android/data/org.openmoh.openmohaa/files/main/
 ```
 
-### Directory permissions
+Do not pre-create or copy `main/save` or `main/configs` with `adb`. Let the app
+create these directories so it can write saves and settings. Directories
+created by the shell can leave the app unable to write; changing their mode
+does not fix ownership. Keep existing saves when upgrading. A save-directory
+permission failure can appear as a black screen on New Game because the first
+autosave fails.
 
-`adb push` **cannot create directories** under an app's data directory — it
-fails with `secure_mkdirs failed: Operation not permitted` partway through the
-transfer. Create them first, in one go:
+## 4. Install the VR configuration and launch
+
+Copy the supplied configuration after installing or upgrading:
 
 ```sh
-cd /path/to/mohaa/main
-adb shell mkdir -p $(find . -type d | sed 's|^\./|/sdcard/Android/data/org.openmoh.openmohaa/files/main/|' | tr '\n' ' ')
-adb push --sync . /sdcard/Android/data/org.openmoh.openmohaa/files/main/
-adb shell chmod -R 775 /sdcard/Android/data/org.openmoh.openmohaa/files
+adb push misc/android/autoexec.cfg \
+  /sdcard/Android/data/org.openmoh.openmohaa/files/main/autoexec.cfg
+adb shell am force-stop org.openmoh.openmohaa
 ```
 
-`chmod` has to come *after* `adb push`, or push fails with
-`remote fchown failed`.
+`autoexec.cfg` is external game configuration, not an APK asset. Reinstalling
+with `adb install -r` preserves the previous file, so replace it explicitly.
+Back up any personal edits before replacing it. The supplied configuration
+starts at the normal menu with cheats, automatic map loading, and diagnostics
+disabled. Keep its `r_worldDlights 0` setting: it works around the unresolved
+[dynamic-light darkening defect](05-dlights.md), and the APK alone does not
+apply that workaround.
 
-**Only push directories the game reads.** A directory created by
-`adb shell mkdir` belongs to `shell`, not to the app, and no amount of
-chmod'ing changes that — 775 lets the app *read* through it, but the app is
-`other` there and still cannot *write*. Pre-creating `main/configs` or
-`main/save` therefore leaves the game unable to save its config or your
-progress, reporting only `Couldn't write omconfig.cfg`. Leave those two out
-and the engine creates them itself, owned by the app and writable:
+Launch **OpenMoHAA VR** from inside the headset (the published 0.2.0 APK is still
+named **OpenMoHAA** in the launcher). Do not use `adb shell am start`;
+it has intermittently left Quest in Meta's loading environment. Force-stop
+after each APK update because `adb install -r` can leave the old process running.
+
+## Logging and implementation
+
+Capture engine output before reproducing a problem:
 
 ```sh
-adb shell rm -rf /sdcard/Android/data/org.openmoh.openmohaa/files/main/configs \
-                 /sdcard/Android/data/org.openmoh.openmohaa/files/main/save
+adb logcat -s openmohaa:V > openmohaa-vr.log
 ```
 
-The failure mode to watch for is silence: files pushed by adb are 644 and
-world readable, so game data loads perfectly while writes fail, which reads
-as "the data is fine".
+The engine redirects stdout and stderr to the same tag. Its Android crash
+handler reports the fault address and ARM64 `pc`/`lr` registers as well as an
+unwind trace. If logcat has no crash report, `adb shell dumpsys activity exit-info`
+can still identify the termination signal.
 
-## 4. Run it
-
-Launch it from the device. Do not use `adb shell am start`; on a Quest it
-intermittently strands the headset in Meta's loading environment.
-
-## Logging
-
-Everything the engine prints goes to logcat under the `openmohaa` tag:
-
-```sh
-adb logcat -s openmohaa
-```
-
-`stdout` and `stderr` are redirected there too, so output from the C library
-and from third party code is not lost.
-
-A crash reports its own stack: bionic has no `<execinfo.h>`, so the backtrace
-is walked with `_Unwind_Backtrace` and resolved through `dladdr`
-(`code/sys/new/sys_android_new.c`). This matters because `tombstoned` does not
-reliably put a backtrace in logcat, and when it does not, that handler is the
-only account of where the engine died. When even that is silent,
-`adb shell dumpsys activity exit-info` still reports the signal.
-
-Verify that logging works *before* you rely on it. A crash handler that has
-been quietly displaced reports nothing, which is indistinguishable from a
-crash that never happened.
-
-## How it fits together
-
-`SDLActivity` loads `libSDL2.so` and `libopenmohaa.so`, then calls `SDL_main`
-in the latter — which is the engine's `main`, renamed by `SDL_main.h`. The
-engine then `dlopen`s the game modules by name.
-
-Those modules ship inside the APK as `libgame.so` and `libcgame.so` rather
-than beside the game data. The prefix is not cosmetic: Android extracts only
-`lib*.so` out of an APK, and having them in the native library directory means
-the loader finds them by name, with no path to get wrong. `DLL_PREFIX` in
-`q_platform.h` is what keeps the engine's name for them in step.
-
-| Library | Loaded by |
-|---|---|
-| `libSDL2.so` | `SDLActivity`, by name |
-| `libopenmohaa.so` | `SDLActivity`, then `SDL_main` is called in it |
-| `libopenal.so`, `libc++_shared.so` | the linker, as dependencies |
-| `libgame.so`, `libcgame.so` | the engine, at runtime |
-
-## Dedicated server
-
-The server builds too, and needs neither SDL nor a renderer:
-
-```sh
-cmake -B build-android-server \
-  -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
-  -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-29 \
-  -DBUILD_SERVER=ON -DBUILD_CLIENT=OFF
-```
-
-It produces an ordinary `omohaaded` executable rather than an APK.
+`SDLActivity` loads `libSDL2.so` and `libopenmohaa.so`, then calls the engine's
+`SDL_main`. The APK also carries OpenAL, gl4es, the OpenXR loader, and
+`libc++_shared.so`; the engine loads `libgame.so` and `libcgame.so` at runtime.
+OpenXR uses SDL's EGL context and supplies the eye swapchain images. The
+[port status](../../../VR_PORT_STATUS.md) records the architecture, known
+limitations, and which changes still need headset validation.

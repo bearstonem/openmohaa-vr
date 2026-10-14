@@ -1,109 +1,93 @@
-# OpenMoHAA
+# OpenMoHAA VR
 
-[![Build](https://github.com/openmoh/openmohaa/actions/workflows/branches-build.yml/badge.svg?branch=main)](https://github.com/openmoh/openmohaa/actions/workflows/branches-build.yml) [![Release](https://img.shields.io/github/v/release/openmoh/openmohaa)](https://github.com/openmoh/openmohaa/releases) [![Downloads](https://img.shields.io/github/downloads/openmoh/openmohaa/total)](https://github.com/openmoh/openmohaa/releases)
+**A standalone VR port of Medal of Honor: Allied Assault targeting Meta Quest and Steam Frame.**
 
-![License](https://img.shields.io/github/license/openmoh/openmohaa) ![Commits](https://img.shields.io/github/commit-activity/t/openmoh/openmohaa)
+[![Quest prerelease](https://img.shields.io/github/v/release/bearstonem/openmohaa-vr?include_prereleases&label=Quest%20prerelease)](https://github.com/bearstonem/openmohaa-vr/releases)
+[![Downloads](https://img.shields.io/github/downloads/bearstonem/openmohaa-vr/total)](https://github.com/bearstonem/openmohaa-vr/releases)
+[![License](https://img.shields.io/badge/license-GPL--2.0--or--later-blue)](COPYING.txt)
 
-![Discord](https://img.shields.io/discord/596049712579215361?logo=discord&logoColor=white&color=5865F2)
+OpenMoHAA VR brings the original game into room-scale VR: head tracking, controller-aimed weapons, tracked hands, physical interactions, and menus and HUD adapted for a headset. The game runs on the headset itself. A PC is needed for the documented sideloading workflow, not for streaming gameplay.
 
-![logo](misc/openmohaa-text-sm.png)
+This is the VR development fork of [OpenMoHAA](https://github.com/openmoh/openmohaa). You must supply your own original game data; no Medal of Honor game assets are included.
 
-## What is OpenMoHAA?
+## Platforms and current status
 
-OpenMoHAA is an open-source project aimed at preserving and enhancing **Medal of Honor: Allied Assault** (including Spearhead and Breakthrough expansions) by providing more features and bugfixes, across modern platforms and architectures.
+| Target | Status |
+| --- | --- |
+| **Meta Quest** | Standalone Android/OpenXR prerelease available. Quest 3 is the headset tested so far; other Quest models are unverified. |
+| **Steam Frame** | Standalone VR development target. Platform integration and device validation are still pending; there is no Steam Frame release yet. |
 
-Powered by [ioquake3](https://github.com/ioquake/ioq3) and the [F.A.K.K SDK](https://code.idtech.space/ritual/fakk2-sdk), OpenMoHAA provides:
-- Full compatibility with the original game: assets, scripts and multiplayer
-- Better support for modern systems
-- Cross-platform support (Linux, Windows, macOS)
-- Support for both single-player and multiplayer modes
-- Includes all fixes from Spearhead 2.15 and Breakthrough 2.40b
-- More fixes and features, such as bots and a ban system
+The current VR backend uses Android, EGL, and OpenGL ES. The inherited desktop engine build is useful for development, but it does not establish Steam Frame VR support.
 
-*OpenMoHAA is an independent project and is not affiliated with or endorsed by Electronic Arts.*
+**This is a port in progress.** The latest code review passed desktop and Android builds and targeted regression checks. Its visual changes and performance impact have not yet been measured in a headset. Upstream campaign, expansion, mod, and multiplayer compatibility should not be read as a claim that each has been validated in this VR port.
 
-## Getting started
+## Download and install on Quest
 
-- 📦 [Installing OpenMoHAA](docs/markdown/01-intro/01-installation.md)
-- ▶️ [How to play: Launching the game, expansions & file locations](docs/markdown/02-running/01-running.md)
-- ❓ [FAQ & Troubleshooting](docs/markdown/02-running/03-faq.md)
-- 🌐 [Setting up a game server](docs/markdown/02-running/02-running-server.md)
+Get the APK, `autoexec.cfg`, and `SHA256SUMS` from the [VR releases page](https://github.com/bearstonem/openmohaa-vr/releases). The current release is [0.2.0](https://github.com/bearstonem/openmohaa-vr/releases/tag/vr-quest3-0.2.0).
 
-## Reporting Issues
+1. Install the APK:
 
-> [!NOTE]
-> OpenMoHAA hasn't hit version 1.0.0 yet. Think of it like a beta build from the golden age of LAN parties. Features are being added, bugs are getting squashed, and more things are being tweaked. Things might change, break, or get even better over time.
-> 
-> If that sounds like your kind of mission, gear up, frag some bots, and help level up OpenMoHAA!
+   ```sh
+   adb install -r openmohaa-vr-quest3-0.2.0.apk
+   adb shell am force-stop org.openmoh.openmohaa
+   ```
 
-If you encounter a bug or a problem, you can do one of the following:
-- Submit an [issue](https://github.com/openmoh/openmohaa/issues) on GitHub (use the template).
-- Join the [OpenMoHAA Discord](https://discord.gg/NYtH58R) for a quick help.
+2. On a fresh installation, launch once from inside the headset to initialize the app's files directory, then close it. Supply the retail game's `main/` data under `/sdcard/Android/data/org.openmoh.openmohaa/files/main/`. See the [Quest build and installation guide](docs/markdown/04-coding/03-android.md) for the data-copy steps.
+3. Copy the release configuration:
 
-## Additional documentation
+   ```sh
+   adb push autoexec.cfg /sdcard/Android/data/org.openmoh.openmohaa/files/main/autoexec.cfg
+   adb shell am force-stop org.openmoh.openmohaa
+   ```
 
-- 📖 [Documentation](https://openmoh.github.io/openmohaa)
-- ⚙️ [Game settings & configuration](docs/markdown/03-configuration/01-configuration.md)
-- 📝 [Code & Scripting reference](docs/markdown/04-coding/02-coding.md)
-- 📜 [Contributing guidelines](CONTRIBUTING.md)
+4. Launch the game from inside the headset, under Unknown Sources. Release 0.2.0 appears as **OpenMoHAA**; subsequent source builds use **OpenMoHAA VR**. Do not start it with `adb shell am start`.
 
-## Current state
+**When upgrading, update the configuration too.** Reinstalling the APK keeps the old `autoexec.cfg`; back up personal changes before replacing it. The supplied configuration starts at the normal menu, disables the development cheats and test map, and includes the current lighting workaround. Let the app create its own `main/save` and `main/configs` directories.
 
-- 🧰 [List of differences](docs/markdown/01-intro/04-differences.md)
+The APK is debug-signed with optimized Release native libraries. Version 0.2.0 uses the same signing certificate as 0.1.0 for upgrades. Verify downloaded assets with `sha256sum -c SHA256SUMS`.
 
-### Single-player
+## VR features
 
-The entire single-player campaign should work (Allied Assault, Spearhead and Breakthrough). If you encounter any bug, please create a new [GitHub issue](https://github.com/openmoh/openmohaa/issues) describing them.
+- Stereo OpenXR rendering and 6DoF head tracking.
+- Controller-aimed weapons, tracked hands, stick locomotion, and snap turning.
+- Body holsters, grip-driven ladder climbing, and physical grenade throws.
+- Menus and mission/death screens displayed on a panel in the room.
+- An on-demand HUD on the off-hand **X** button: compass, objectives, health, and ammo.
+- Controller-based use interaction and a weapon-selection wheel.
 
-### Multiplayer
+These systems are implemented; controller interactions, weapon alignment, and individual missions still need broader device testing.
 
-- Almost fully stable
-- All official game modes are supported, including those from Spearhead and Breakthrough:
-  - Free-For-All
-  - Team-Deathmatch
-  - Round-based match
-  - Objective match
-  - Tug-of-War (Spearhead)
-  - Liberation (Breakthrough)
-- Popular mods like **Freeze-Tag** are supported
-- Built-in bots for offline practice and for testing
-  - 🔧 [Setting up bots](docs/markdown/02-running/01-running.md#Playing-with-bots)
+## Known issues
 
-You can host your own [OpenMoHAA server](docs/markdown/02-running/02-running-server.md#) or join others using OpenMoHAA.
+- Some fonts can render as black boxes because of an unresolved font-atlas texture issue.
+- Dynamic lights can darken the scenery. The supplied `autoexec.cfg` keeps `r_worldDlights 0`; the APK's defaults alone do not apply that workaround.
+- Per-weapon grip alignment and remaining foliage behavior need further work.
+- Fresh headset performance measurements are pending. Earlier Quest 3 measurements are historical, not benchmarks of the latest release.
+- Steam Frame integration and validation remain to be done.
 
-## Screenshots
+See [port status](VR_PORT_STATUS.md) for implementation details and the historical Quest measurements.
 
-|                                                                                   |                                                                            |
-|-----------------------------------------------------------------------------------|----------------------------------------------------------------------------|
-| ![](docs/assets/images/v0.60.0-x86_64/mohdm1_1.png)                                      | ![](docs/assets/images/v0.60.0-x86_64/training_1.png)                               |
-| ![](docs/assets/images/v0.60.0-x86_64/flughafen_1.png)                                   | ![](docs/assets/images/v0.60.0-x86_64/flughafen_2.png)                            |
-| ![](docs/assets/images/v0.60.0-x86_64/mohdm2_1.png "Playing Freeze-Tag mode with bots")  | ![](docs/assets/images/v0.60.0-x86_64/training_3.png "Single-Player training")    |
+## Development
 
-*More screenshots [here](docs/assets/images)*
+The active development branch is `vr-quest3`; the project targets both Quest and Steam Frame.
 
-## Development & Compiling
+```sh
+git clone --branch vr-quest3 https://github.com/bearstonem/openmohaa-vr.git
+cd openmohaa-vr
+```
 
-- 💻 [Building from source](docs/markdown/04-coding/01-compiling.md)
+- [Quest / Android build and installation](docs/markdown/04-coding/03-android.md)
+- [Documentation index](docs/README.md)
+- [Source layout](LAYOUT.md)
+- [Contributing](CONTRIBUTING.md)
+- [Port status](VR_PORT_STATUS.md), [original Quest plan](VR_PORT_PLAN.md), and [renderer notes](VR_RENDERER_HANDOFF.md)
+- [Reusable Quest porting guide](QUEST_PORTING_GUIDE.md)
+- [Desktop engine build reference](docs/markdown/04-coding/01-compiling.md)
 
-## Third party librairies
+## Feedback and credits
 
-The following third party tools and libraries are used by the project
+Report port bugs in [this repository's issue tracker](https://github.com/bearstonem/openmohaa-vr/issues). Include your headset, release or commit, map, steps to reproduce, and relevant logs. Steam Frame development reports should include the runtime and build configuration.
 
-- [Flex](https://github.com/westes/flex)
-- [Bison](https://savannah.gnu.org/projects/bison/)
-- [SDL](http://www.libsdl.org/)
-- [OpenAL](https://www.openal.org/)
-- [LibMAD](http://www.underbit.com/products/mad/)
-- [cURL](https://curl.se/)
-- [Libogg](https://github.com/gcp/libogg)
-- [Libvorbis](https://xiph.org/vorbis/)
-- [Libopus](https://opus-codec.org/)
+Built on the work of the [OpenMoHAA project](https://github.com/openmoh/openmohaa), [ioquake3](https://github.com/ioquake/ioq3), and the F.A.K.K SDK. [Team Beef's RTCWQuest](https://github.com/DrBeef/RTCWQuest) is the reference for much of the VR integration. The original engine documentation, assets, and attribution remain in the tree.
 
-## Resources
-
-- 🔗 [GitHub Repository](https://github.com/openmoh/openmohaa/)
-- 🌐 [MOH-DB](https://www.moh-db.com/)
-- 🕹️ [333networks](https://333networks.com/)
-- 📂 [ModDB](https://www.moddb.com/games/medal-of-honor-allied-assault)
-- 📂 [GameBanana](https://gamebanana.com/games/720)
-- 💬 [Join us on Discord](https://discord.gg/NYtH58R)
+Engine source is licensed under [GPL-2.0-or-later](COPYING.txt). Medal of Honor game data is separately owned and is not distributed here. This is an independent community port, not an official Electronic Arts, Meta, or Valve release.

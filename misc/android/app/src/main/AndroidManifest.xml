@@ -2,7 +2,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     android:installLocation="auto">
 
-    <!-- renderergl2 is driven as GLES 3; renderergl1 is not built for Android -->
+    <!-- OpenXR uses GLES 3; the default GL1 renderer runs through gl4es. -->
     <uses-feature android:glEsVersion="0x00030000" android:required="true" />
 
     <!--

@@ -1,5 +1,11 @@
 # Installation guide
 
+This is the inherited **desktop OpenMoHAA engine** installation reference. For
+OpenMoHAA VR on Meta Quest, use the [Quest installation guide](../04-coding/03-android.md)
+and [VR releases](https://github.com/bearstonem/openmohaa-vr/releases). Steam Frame
+is a development target with no release yet. The desktop downloads below are
+maintained by upstream and do not include this fork's VR port.
+
 ## Before you start
 
 The game should be able to run on any modern hardware. You can verify the [System requirements](03-requirements.md).
@@ -29,7 +35,6 @@ If you already have MOH:AA from a CD, make sure to [Install official patches](#i
 2. Then check the "**Start in**" field, that's your game folder.
 
 ![](../../assets/screenshots/install_guide/windows_installation_shortcut.png)
-![](screenshots/install_guide/windows_installation_shortcut.png)
 
 Alternatively, try one of these common locations:
 - C:\GOG Games\Medal of Honor - Allied Assault War Chest
@@ -49,7 +54,6 @@ If not there, you'll need to search where you installed it.
 
 To do that, **right-click each file**, then choose **Send to → Desktop (create shortcut)**.
 
-![](screenshots/install_guide/windows_installation_sendto.png)
 ![](../../assets/screenshots/install_guide/windows_installation_sendto.png)
 
 Now you can launch any version of the game directly from your desktop using OpenMoHAA.

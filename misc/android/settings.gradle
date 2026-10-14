@@ -13,6 +13,6 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "openmohaa"
+rootProject.name = "openmohaa-vr"
 
 include ":app"

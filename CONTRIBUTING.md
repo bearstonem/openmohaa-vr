@@ -1,94 +1,79 @@
-# Contributing guidelines
+# Contributing to OpenMoHAA VR
 
-Whether you're reporting issues or coding, follow the guidelines below to help keep the project consistent and maintainable.
+OpenMoHAA VR is an independent VR port of [OpenMoHAA](https://github.com/openmoh/openmohaa), with standalone Meta Quest releases and Steam Frame as a development target. There is no Steam Frame binary yet. These guidelines apply to [bearstonem/openmohaa-vr](https://github.com/bearstonem/openmohaa-vr); upstream maintains its own contribution policies and release process.
+
+Start with the [port status](VR_PORT_STATUS.md), [repository layout](LAYOUT.md), and [renderer handoff](VR_RENDERER_HANDOFF.md). The status document separates device-tested behavior from changes that still need headset validation.
 
 All contributions, including **issues**, **discussions**, **code comments**, **commit messages**, and **documentation**, must be written in *English*. This ensures clarity and consistency for all contributors.
 
 There are many ways to contribute. Contributions are welcome in the following areas:
+
 - Fixing [bugs and crashes](#issues).
-- Documentation improvements
-- Performance improvements
-- Testing
-- Helping users (issues, discussions)
-- Suggesting enhancements (via issues only)
+- VR rendering, tracking, controller interaction, and HUD improvements.
+- Performance improvements backed by measurements.
+- Headset testing and reproducible regression reports.
+- Documentation and build improvements.
+- Steam Frame development and testing, with support claims kept explicit.
+- Helping users and proposing enhancements through this repository's issues.
 
-New features are designed and implemented by maintainers, so the project's direction and maintenance burden stay consistent.
-
-If you want to propose a new feature, please open an issue first.
-
-Do not start implementing a new feature before getting approval. Pull requests that introduce unapproved features may be closed without review.
+Discuss major features or architecture changes in a [port issue](https://github.com/bearstonem/openmohaa-vr/issues) before investing in a large implementation. Focused fixes, tests, and documentation improvements can be submitted directly.
 
 ---
 
 ## Issues
 
 Before opening a new issue:
-1. Make sure you're running the [latest development version](https://github.com/openmoh/openmohaa/releases/tag/dev).
-2. Check if the issue already exists.
 
-When filing an issue, include as much detail as possible, this helps reproducing and fixing the problem effectively:
-- Clear description of the bug.
-- Steps to reproduce.
-- Log file (`qconsole.log`) and crash output if applicable:
-    - Attach the relevant log file.
-    - For crashes, paste the console output that includes the backtrace.
-- Operating System and version. Example: `Debian 13`.
-- Full game version. Example: `0.70.0-alpha+0.0b1a20dcf win_msvc64-x86_64-debug`. The version is obtained at the start of the log file, or by executing the `version` command in console.
+1. Check the [port releases](https://github.com/bearstonem/openmohaa-vr/releases) and [known issues](VR_PORT_STATUS.md). Upstream desktop releases do not include this port's VR changes.
+2. Search [existing port issues](https://github.com/bearstonem/openmohaa-vr/issues).
 
-## Usage of generative AI / Large language models
+Include the following details to help reproduce and diagnose an issue:
 
-### Policy
+- A clear description and reproducible steps, including the mission/map and game edition.
+- Headset model, headset OS/firmware, controllers, and OpenXR runtime/version when known.
+- Port release and asset name, or the source commit and build configuration. Include the engine version from the startup log or `version` command as well.
+- Relevant VR/render settings, mods, and whether the release's external `autoexec.cfg` was installed.
+- Startup and failure logs, including `qconsole.log`, Android logcat, or runtime logs as appropriate. Include a backtrace for crashes.
+- For visual or performance issues, whether one or both eyes are affected, and any captures or frame-time measurements.
 
-This project requires that all contributions be human-authored.
+For Quest logs, begin capture before reproducing the issue: `adb logcat -v threadtime -s openmohaa:V AndroidRuntime:E > openmohaa-vr.log`. See the [bug report template](.github/ISSUE_TEMPLATE/bug_report.md) for the full checklist.
 
-Do not submit any code, documentation, issues, pull requests, commit messages or comments that are generated using AI or similar assistive tools (such as Microsoft Copilot, Anthropic Claude, ChatGPT...).
+Report port problems here first. If a problem also reproduces in upstream OpenMoHAA, provide that evidence and follow upstream's policies when reporting or contributing there.
 
-- **No AI-derived patches**. If the change was proposed by an AI, it must not be ported over "by hand". If the idea came from AI, treat is as untrusted and do your own independent implementation.
-- **No AI-assisted refactors**. Mass rewrites, LLM-based formatting, or modernization are not accepted.
-- **Enforcement**. Maintainers may request clarification. PRs suspected of AI involvement may be rejected or reverted, and may lead to a ban.
+## Tools and contribution responsibility
 
-#### Acceptable uses
+AI-assisted contributions are welcome in this fork. Contributors remain responsible for reviewing, understanding, and validating every submitted change, including generated code and documentation. Explain the problem, the resulting behavior, and the checks performed; distinguish source review, automated tests, and actual headset testing.
 
-- **Non-generative tools** are allowed: static analyzers, formatters, linters, sanitizers, fuzzers and IDE features are fine as long they do not generate code.
-- **Translation tools** to help communicating between people.
+Keep changes focused and reviewable. Preserve license headers, copyright notices, and authorship attribution, and identify the source and license of imported code or assets. Do not submit proprietary game data. Tool use does not change these responsibilities.
 
-### Reasoning
-
-This policy exists due to:
-- **Copyright and licensing risk**. The origin of the outputs may be unclear as these tools plagiarize the original sources without permission.
-- **Security and authenticity**. AI produces plausible code but may often look wrong. This could work, but would turn into undefined behavior, vulnerabilities, or time spent in a debugger.
-- **Maintability**. Changes must be explainable and reviewable. Humans can explain tradeoffs they consciously accepted. Generated code can't. If you can't explain why a specific line exists, it shouldn't be proposed at all.
-- **Respect for maintainers**. Submitting contributions generated by these tools waste maintainers resources to review them.
-
-### Responsibility
-
-When submitting, you agree that:
-
-- The submission **complies with this policy**. Changes must be able to be explained and justified during review.
-- The submission **can be declined** if it is **suspected to use AI** or is raising reviewability concerns.
+This policy applies only to OpenMoHAA VR. It does not override upstream OpenMoHAA's independently maintained policies or authorize sending AI-assisted work upstream.
 
 ## Coding
 
 ### Compatibility
 
-All changes must stay retro-compatible with the original game:
+Preserve the engine's compatibility with the original game while adapting presentation and input for VR:
+
 - Assets must be loaded correctly.
 - Changes related to networking must be compatible with existing MOHAA clients and servers, these changes must not cause an error/disconnect.
 - Scripts/mods must remain functional.
-- The singleplayer campaign must be fully playable.
+- Preserve single-player campaign behavior; report which missions and expansions were actually tested.
+- Keep desktop and dedicated-server builds working when changing shared code.
+- Do not change existing package IDs, config/save paths, network identifiers, or binary/module names solely for display branding.
 
 ### Coding style & Guidelines
 
 - Match the existing code style in any files you modify.
-- Avoid personal tags or author comments (.e.g., `// @Name: note`). Git already tracks authorship.
-- Ensure the code builds successfully using CI.
-- Use **camelCase** notation for all variables, and **PascalCase** notation for functions. Even if some existing code doesn't.
-- Format code using `clang-format`.
+- Avoid personal tags or author comments (e.g., `// @Name: note`). Git already tracks authorship.
+- Build the affected targets and run relevant checks. State when a target or headset was unavailable.
+- Follow the surrounding naming conventions, including engine subsystem prefixes such as `CG_`, `CL_`, `R_`, and `VR_`.
+- Format changed code using the repository's `clang-format` configuration; avoid unrelated whole-file formatting.
     - In VSCode from the command palette: **Format document**
 
 ### Event declaration
 
 When declaring a new Event, use the following structure:
+
 ```cpp
 Event EV_YourEventName  // Pascal Case naming convention
 (
@@ -133,6 +118,7 @@ When modifying existing code from the original game or adding new classes, annot
 ```
 
 If referencing a specific game version, replace OPM with that version number. Example:
+
 ```cpp
 // Added in 2.11
 //  Make sure to clean turret stuff up
@@ -141,6 +127,7 @@ If referencing a specific game version, replace OPM with that version number. Ex
 Known versions are `1.00`, `1.10`, `1.11`, `2.0`, `2.1`, `2.11`, `2.15`, `2.30`, `2.40`.
 
 You can also group multiple related functions like this:
+
 ```cpp
 // Added in OPM
 //====
@@ -166,26 +153,27 @@ Pull Requests are the preferred way of submitting code changes.
 
 ### Before you start
 
-1. **Discuss major changes first**: open an issue or discuss about it.
-2. **Create a branch** based on the `main` branch (you shouldn't commit directly on `main`)
+1. **Discuss major changes first** in this port's issue tracker.
+2. **Create a branch** based on this repository's current default branch, rather than upstream's `main`.
 3. **Keep PRs as small as possible and focused**: One clear purpose per PR.
 
 ### Submitting a PR
 
-- Target the correct branch (usually `main`).
+- Target this repository's current default branch, unless a maintainer requests a different integration branch.
 - Add a short and clear description of what you changed and why.
 - Reference matching issues (e.g. `Fixes #123`).
 - Make sure your code builds and passes tests.
 - Test locally to ensure your changes don't break functionality or compatibility.
+- For VR changes, list the headset/runtime, build, and scenarios tested. A successful build alone does not establish device support or a performance improvement.
 
 ### Reviews
 
 - Maintainers may ask for tweaks or commit changes directly to your PR, that's normal.
 - Stay polite and technical.
-- Once approved, your changes will be merged.
+- Maintainers decide whether and when a change is ready to merge.
 
 ### Additional Notes
 
 - Contributions follow the same license as the project.
 - Keep things consistent with existing code and docs.
-- If you're unsure about anything, you can discuss it on Discord via [this link](https://discord.gg/NYtH58R).
+- Use the [OpenMoHAA VR issue tracker](https://github.com/bearstonem/openmohaa-vr/issues) for port questions and proposals.
