@@ -7,6 +7,16 @@ plan, and what to do next.
 
 Branch `vr-quest3`. The historical status below records previously committed work.
 
+### Quest release 0.2.0 — October 14, 2026
+
+The Android package uses version code 2 and version name `0.83.0-vr0.2.0`.
+The supplied `autoexec.cfg` starts at the normal menu, with cheats, automatic
+weapon grants, test-map loading, and diagnostic traces disabled. Replace the
+external config when upgrading: reinstalling the APK preserves the old one.
+Keep `r_worldDlights 0` until the lighting defect is resolved; that workaround
+is supplied by the config, not by the APK's defaults. This remains a prerelease,
+and the September review changes still need headset validation.
+
 ### Code review update — September 29, 2026
 
 These fixes remove the unconditional GPU wait after each eye;

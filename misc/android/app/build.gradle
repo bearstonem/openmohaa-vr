@@ -1,0 +1,78 @@
+plugins {
+    id 'com.android.application'
+}
+
+// The native libraries are built by CMake, not by gradle. See
+// docs/markdown/android.md - build the engine first, then package it here.
+def nativeLibs = file(rootProject.file(nativeLibsDir).absolutePath)
+
+def sdlJava = sdlJavaDir?.trim()
+if (!sdlJava) {
+    // The CMake build records the SDL tree it used next to the staged libraries
+    def fromCMake = file("${nativeLibs}/../android-build.properties")
+    if (fromCMake.exists()) {
+        def props = new Properties()
+        fromCMake.withInputStream { props.load(it) }
+        sdlJava = props.getProperty('sdlJavaDir')
+    }
+}
+
+if (!sdlJava || !file(sdlJava).exists()) {
+    throw new GradleException(
+        "Could not find SDL's Java sources. Build the engine with CMake first, " +
+        "or pass -PsdlJavaDir=<SDL source>/android-project/app/src/main/java. " +
+        "They must come from the same SDL the engine was linked against.")
+}
+
+android {
+    namespace 'org.openmoh.openmohaa'
+    compileSdk 34
+
+    // Only so AGP can find the NDK's strip tool; the engine itself is built by
+    // CMake outside gradle. Without it the libraries ship with full debug info,
+    // which works but makes for a much larger APK.
+    def ndkFromEnv = System.getenv('ANDROID_NDK_HOME')
+    if (ndkFromEnv) {
+        ndkPath = ndkFromEnv
+    }
+
+    defaultConfig {
+        applicationId "org.openmoh.openmohaa"
+        // Quest 3 runs Android 12 (API 32)
+        minSdk 29
+        targetSdk 32
+        versionCode 2
+        versionName "0.83.0-vr0.2.0"
+
+        ndk {
+            abiFilters 'arm64-v8a'
+        }
+    }
+
+    sourceSets {
+        main {
+            java.srcDirs += sdlJava
+            jniLibs.srcDirs = [nativeLibs]
+        }
+    }
+
+    buildTypes {
+        release {
+            // The engine is already built optimised; nothing here to shrink
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    // The engine binaries are large and already compressed poorly; leaving
+    // them uncompressed lets the loader mmap them straight out of the APK.
+    packagingOptions {
+        jniLibs {
+            useLegacyPackaging false
+        }
+    }
+}

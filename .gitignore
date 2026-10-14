@@ -1,4 +1,6 @@
 build*
+!/misc/android/build.gradle
+!/misc/android/app/build.gradle
 *.swp
 *tags
 *~
